@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>词汇语义距离可视化工具</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🌐 词汇语义距离可视化工具</h1>
+            <p class="subtitle">基于AI嵌入向量的跨文化语义分析平台</p>
+        </header>
+
+        <div class="upload-section">
+            <div class="upload-box">
+                <h2>📤 上传词汇文件</h2>
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="file-input-wrapper">
+                        <input type="file" id="fileInput" name="file" accept=".txt,.csv" required>
+                        <label for="fileInput" class="file-label">
+                            <span class="file-icon">📄</span>
+                            <span class="file-text">选择文件或拖拽到此处</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="threshold">网络图相似度阈值:</label>
+                        <input type="number" id="threshold" name="threshold" value="0.3" min="0" max="1" step="0.1">
+                        <small>只显示相似度高于此值的词汇连接</small>
+                    </div>
+                    
+                    <button type="submit" class="btn-primary" id="submitBtn">
+                        <span class="btn-text">🚀 开始分析</span>
+                    </button>
+                </form>
+                
+                <div class="file-format-help">
+                    <h3>📝 文件格式说明</h3>
+                    <p>支持以下格式（每行一个词汇）：</p>
+                    <ul>
+                        <li><strong>纯词汇格式：</strong>每行一个词汇</li>
+                        <li><strong>中英文对照：</strong>用逗号或制表符分隔，如：Trust,信任</li>
+                        <li><strong>CSV格式：</strong>支持多列，系统会自动识别第一列</li>
+                    </ul>
+                    <div class="example">
+                        <strong>示例：</strong><br>
+                        Trust<br>
+                        Commitment<br>
+                        Partnership<br>
+                        信任<br>
+                        承诺
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="loading" class="loading hidden">
+            <div class="spinner"></div>
+            <p>正在分析词汇语义关系，请稍候...</p>
+        </div>
+
+        <div id="results" class="results hidden">
+            <h2>📊 分析结果</h2>
+            <div class="results-info">
+                <p>共分析了 <span id="wordCount">0</span> 个词汇</p>
+            </div>
+
+            <div class="visualization-section">
+                <div class="viz-card">
+                    <h3>🔥 语义相似度热力图</h3>
+                    <div class="image-container">
+                        <img id="heatmapImg" src="" alt="热力图">
+                    </div>
+                </div>
+
+                <div class="viz-card">
+                    <h3>🕸️ 语义网络图</h3>
+                    <div class="image-container">
+                        <img id="networkImg" src="" alt="网络图">
+                    </div>
+                </div>
+
+                <div class="viz-card">
+                    <h3>📍 语义空间2D可视化</h3>
+                    <div class="image-container">
+                        <img id="mdsImg" src="" alt="MDS可视化">
+                    </div>
+                </div>
+            </div>
+
+            <div class="similarity-table-section">
+                <h3>🔗 最相似的词汇对（Top 20）</h3>
+                <div class="table-container">
+                    <table id="similarityTable">
+                        <thead>
+                            <tr>
+                                <th>排名</th>
+                                <th>词汇1</th>
+                                <th>词汇2</th>
+                                <th>相似度</th>
+                            </tr>
+                        </thead>
+                        <tbody id="similarityTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="error" class="error hidden">
+            <h3>❌ 错误</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+
+    <footer>
+        <p>基于 Sentence Transformers 多语言模型 | 支持中英文语义分析</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
+
