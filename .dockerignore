@@ -1,0 +1,38 @@
+# 排除不需要的文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 排除结果和上传文件（运行时生成）
+results/*.png
+results/*.jpg
+results/*.jpeg
+uploads/*
+!uploads/.gitkeep
+!results/.gitkeep
+
+# Git
+.git/
+.gitignore
+
+# Docker相关
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# 日志
+*.log
+
+# OS文件
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 注意：.venv 和模型缓存会被包含在镜像中

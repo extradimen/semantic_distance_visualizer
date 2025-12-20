@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>词汇语义距离可视化工具</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -18,7 +19,7 @@
                 <h2>📤 上传词汇文件</h2>
                 <form id="uploadForm" enctype="multipart/form-data">
                     <div class="file-input-wrapper">
-                        <input type="file" id="fileInput" name="file" accept=".txt,.csv" required>
+                        <input type="file" id="fileInput" name="file" accept=".csv,.xlsx,.xls" required>
                         <label for="fileInput" class="file-label">
                             <span class="file-icon">📄</span>
                             <span class="file-text">选择文件或拖拽到此处</span>
@@ -27,7 +28,7 @@
                     
                     <div class="form-group">
                         <label for="threshold">网络图相似度阈值:</label>
-                        <input type="number" id="threshold" name="threshold" value="0.3" min="0" max="1" step="0.1">
+                        <input type="number" id="threshold" name="threshold" value="0.3" min="0" max="1" step="0.05">
                         <small>只显示相似度高于此值的词汇连接</small>
                     </div>
                     
@@ -38,19 +39,19 @@
                 
                 <div class="file-format-help">
                     <h3>📝 文件格式说明</h3>
-                    <p>支持以下格式（每行一个词汇）：</p>
+                    <p>支持CSV和Excel文件（.csv, .xlsx, .xls），文件必须包含三列：</p>
                     <ul>
-                        <li><strong>纯词汇格式：</strong>每行一个词汇</li>
-                        <li><strong>中英文对照：</strong>用逗号或制表符分隔，如：Trust,信任</li>
-                        <li><strong>CSV格式：</strong>支持多列，系统会自动识别第一列</li>
+                        <li><strong>第一列：</strong>词汇分类（如：情感、认知、行为等）</li>
+                        <li><strong>第二列：</strong>语言种类（如：中文、英文、日文等）</li>
+                        <li><strong>第三列：</strong>词汇本身</li>
                     </ul>
                     <div class="example">
-                        <strong>示例：</strong><br>
-                        Trust<br>
-                        Commitment<br>
-                        Partnership<br>
-                        信任<br>
-                        承诺
+                        <strong>示例（CSV格式）：</strong><br>
+                        情感,中文,快乐<br>
+                        情感,中文,悲伤<br>
+                        情感,英文,Happiness<br>
+                        认知,中文,思考<br>
+                        认知,英文,Thinking
                     </div>
                 </div>
             </div>
@@ -69,21 +70,27 @@
 
             <div class="visualization-section">
                 <div class="viz-card">
-                    <h3>🔥 语义相似度热力图</h3>
-                    <div class="image-container">
-                        <img id="heatmapImg" src="" alt="热力图">
+                    <h3>🔥 语义相似度热力图（按分类和语言分组）</h3>
+                    <div class="image-container" id="heatmapContainer">
+                        <!-- 热力图将动态插入这里 -->
                     </div>
                 </div>
 
                 <div class="viz-card">
-                    <h3>🕸️ 语义网络图</h3>
-                    <div class="image-container">
-                        <img id="networkImg" src="" alt="网络图">
+                    <h3>🕸️ 语义网络图（交互式）</h3>
+                    <div class="network-controls">
+                        <label for="networkThreshold">相似度阈值: <span id="thresholdValue">0.30</span></label>
+                        <input type="range" id="networkThreshold" min="0" max="1" step="0.05" value="0.3">
+                        <div id="networkLoading" class="network-loading hidden">正在更新网络图...</div>
                     </div>
+                    <div class="network-container">
+                        <div id="networkContainer" style="width: 100%; height: 800px; border: 1px solid #2d3142; border-radius: 8px; background: #1a1d29;"></div>
+                    </div>
+                    <div id="networkLegend" class="network-legend"></div>
                 </div>
 
                 <div class="viz-card">
-                    <h3>📍 语义空间2D可视化</h3>
+                    <h3>📍 语义空间2D可视化（按分类着色）</h3>
                     <div class="image-container">
                         <img id="mdsImg" src="" alt="MDS可视化">
                     </div>
@@ -98,7 +105,9 @@
                             <tr>
                                 <th>排名</th>
                                 <th>词汇1</th>
+                                <th>分类1</th>
                                 <th>词汇2</th>
+                                <th>分类2</th>
                                 <th>相似度</th>
                             </tr>
                         </thead>
@@ -122,4 +131,3 @@
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>
-
