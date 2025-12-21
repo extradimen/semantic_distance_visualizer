@@ -23,11 +23,14 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. 模型已包含在仓库中
+### 3. 模型加载
 
-**重要**：模型文件已经包含在 `.cache/huggingface/` 目录中，无需额外下载。
+**模型加载策略**：
+- **优先从 ModelScope 加载**：如果已安装 `modelscope`，应用会自动从 ModelScope（魔搭社区）下载模型，适合中国大陆用户，下载速度更快
+- **自动回退**：如果 ModelScope 不可用或未安装，会自动回退到 Hugging Face 下载
+- **本地缓存**：模型下载后会缓存在 `.cache/` 目录中，后续启动无需重新下载
 
-应用会自动从项目目录加载模型（通过 `app.py` 中的环境变量设置）。
+**注意**：首次运行需要下载模型（约 470MB），请确保网络连接正常。
 
 ### 4. 启动服务
 
@@ -67,7 +70,10 @@ python app.py
 
 ## 注意事项
 
-1. **模型文件**：模型文件（约 458MB）已包含在 Git 仓库中，克隆后即可使用
+1. **模型下载**：
+   - 首次运行时会自动下载模型（约 470MB）
+   - 推荐安装 `modelscope` 以从 ModelScope 下载（中国大陆用户推荐）
+   - 模型会缓存在 `.cache/` 目录中
 2. **Python 版本**：建议使用 Python 3.12 或更高版本
 3. **系统依赖**：确保系统已安装中文字体（用于图表显示）
    ```bash
@@ -84,8 +90,10 @@ python app.py
 ## 故障排查
 
 ### 模型加载失败
-- 检查 `.cache/huggingface/hub/` 目录是否存在
-- 检查 `app.py` 中的环境变量设置
+- 检查网络连接是否正常
+- 如果使用 ModelScope，检查是否已安装：`pip install modelscope`
+- 检查 `.cache/modelscope/` 或 `.cache/huggingface/` 目录是否存在
+- 查看应用日志了解具体错误信息
 
 ### 中文显示问题
 - 安装中文字体（见上方）

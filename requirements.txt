@@ -10,4 +10,5 @@ openpyxl>=3.1.0
 torch>=2.0.0
 transformers>=4.30.0
 setuptools>=65.0.0
+modelscope>=1.9.0  # 用于从 ModelScope 加载模型（推荐，适用于中国大陆用户）
 

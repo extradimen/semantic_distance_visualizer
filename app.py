@@ -38,18 +38,50 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
 
-# 设置 Hugging Face 缓存目录为项目目录
+# 设置模型缓存目录为项目目录
 project_root = os.path.dirname(os.path.abspath(__file__))
-hf_cache_dir = os.path.join(project_root, '.cache', 'huggingface')
-os.makedirs(hf_cache_dir, exist_ok=True)
-os.environ['HF_HOME'] = hf_cache_dir
-os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
+cache_dir = os.path.join(project_root, '.cache')
+os.makedirs(cache_dir, exist_ok=True)
 
-# 加载预训练模型（使用多语言模型以支持中英文）
+# ModelScope 模型配置
+modelscope_model_id = 'extradimen/paraphrase-multilingual-MiniLM-L12-v2'
+modelscope_cache_dir = os.path.join(cache_dir, 'modelscope', 'hub')
+
+# 加载预训练模型（优先从 ModelScope 加载，适用于中国大陆用户）
 print("正在加载语义嵌入模型...")
-print(f"模型缓存目录: {os.environ.get('HF_HUB_CACHE')}")
-model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-print("模型加载完成！")
+try:
+    # 尝试从 ModelScope 加载
+    try:
+        from modelscope import snapshot_download
+        print(f"正在从 ModelScope 下载模型: {modelscope_model_id}")
+        model_dir = snapshot_download(modelscope_model_id, cache_dir=modelscope_cache_dir)
+        print(f"模型已下载到: {model_dir}")
+        # 从本地路径加载模型
+        model = SentenceTransformer(model_dir)
+        print("✅ 模型已从 ModelScope 加载完成！")
+    except ImportError:
+        print("⚠️  ModelScope SDK 未安装，尝试从 Hugging Face 加载...")
+        print("   提示: 如需从 ModelScope 加载，请运行: pip install modelscope")
+        # 回退到 Hugging Face
+        hf_cache_dir = os.path.join(cache_dir, 'huggingface')
+        os.makedirs(hf_cache_dir, exist_ok=True)
+        os.environ['HF_HOME'] = hf_cache_dir
+        os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
+        model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        print("✅ 模型已从 Hugging Face 加载完成！")
+    except Exception as e:
+        print(f"⚠️  从 ModelScope 加载失败: {e}")
+        print("   回退到 Hugging Face...")
+        # 回退到 Hugging Face
+        hf_cache_dir = os.path.join(cache_dir, 'huggingface')
+        os.makedirs(hf_cache_dir, exist_ok=True)
+        os.environ['HF_HOME'] = hf_cache_dir
+        os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
+        model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        print("✅ 模型已从 Hugging Face 加载完成！")
+except Exception as e:
+    print(f"❌ 模型加载失败: {e}")
+    raise
 
 def parse_vocabulary_file(file_path, filename):
     """解析上传的词汇文件，支持CSV和Excel格式

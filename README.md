@@ -4,8 +4,10 @@
 
 ## 功能特性
 
-- 📤 **文件上传**：支持多种格式的词汇文件（纯文本、CSV、中英文对照）
+- 📤 **文件上传**：支持多种格式的词汇文件（纯文本、CSV、Excel，三列格式：分类/语言/词汇）
 - 🤖 **AI语义分析**：使用多语言Sentence Transformers模型计算语义嵌入
+  - 优先从 ModelScope（魔搭社区）加载模型，适合中国大陆用户
+  - 自动回退到 Hugging Face（如果 ModelScope 不可用）
 - 📊 **多种可视化**：
   - 语义相似度热力图
   - 语义网络图
@@ -115,14 +117,23 @@ semantic_distance_visualizer/
 
 - **后端**：Flask
 - **AI模型**：sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2)
+  - 模型来源：优先从 [ModelScope](https://www.modelscope.cn/models/extradimen/paraphrase-multilingual-MiniLM-L12-v2) 加载
+  - 备用来源：Hugging Face（如果 ModelScope 不可用）
 - **可视化**：matplotlib, seaborn, networkx
 - **前端**：HTML5, CSS3, JavaScript
 
 ## 注意事项
 
-- 首次运行时会自动下载预训练模型（约420MB），请确保网络连接正常
-- 建议词汇数量在2-100个之间
-- 分析大量词汇可能需要较长时间，请耐心等待
+- **模型下载**：
+  - 首次运行时会自动下载预训练模型（约470MB）
+  - 如果已安装 `modelscope`，将从 ModelScope 下载（推荐，适合中国大陆用户）
+  - 如果未安装 `modelscope` 或下载失败，将自动回退到 Hugging Face
+  - 模型会缓存在项目目录的 `.cache/` 文件夹中
+- **使用建议**：
+  - 建议词汇数量在2-100个之间
+  - 分析大量词汇可能需要较长时间，请耐心等待
+  - 热力图按（分类，语言）分组计算相似度
+  - 网络图和散点图按分类着色
 
 ## 许可证
 
