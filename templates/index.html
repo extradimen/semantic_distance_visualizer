@@ -14,10 +14,10 @@
             <p class="subtitle">基于AI嵌入向量的跨文化语义分析平台</p>
         </header>
 
-        <div class="upload-section">
+        <div class="upload-section" ondragover="event.preventDefault(); return false;" ondrop="event.preventDefault(); return false;">
             <div class="upload-box">
                 <h2>📤 上传词汇文件</h2>
-                <form id="uploadForm" enctype="multipart/form-data">
+                <form id="uploadForm" method="POST" enctype="multipart/form-data" action="javascript:void(0);" onsubmit="return false;">
                     <div class="file-input-wrapper">
                         <input type="file" id="fileInput" name="file" accept=".csv,.xlsx,.xls" required>
                         <label for="fileInput" class="file-label">
@@ -28,31 +28,33 @@
                     
                     <div class="form-group">
                         <label for="threshold">网络图相似度阈值:</label>
-                        <input type="number" id="threshold" name="threshold" value="0.3" min="0" max="1" step="0.05">
-                        <small>只显示相似度高于此值的词汇连接</small>
+                        <input type="number" id="threshold" name="threshold" value="0.3" min="0" max="1" step="0.05" required>
+                        <small>只显示相似度高于此值的词汇连接（分析前指定，上传后不可修改）</small>
                     </div>
                     
-                    <button type="submit" class="btn-primary" id="submitBtn">
+                    <button type="button" class="btn-primary" id="submitBtn">
                         <span class="btn-text">🚀 开始分析</span>
                     </button>
                 </form>
                 
                 <div class="file-format-help">
                     <h3>📝 文件格式说明</h3>
-                    <p>支持CSV和Excel文件（.csv, .xlsx, .xls），文件必须包含三列：</p>
+                    <p>支持CSV和Excel文件（.csv, .xlsx, .xls），文件格式要求：</p>
                     <ul>
-                        <li><strong>第一列：</strong>词汇分类（如：情感、认知、行为等）</li>
-                        <li><strong>第二列：</strong>语言种类（如：中文、英文、日文等）</li>
-                        <li><strong>第三列：</strong>词汇本身</li>
+                        <li><strong>第一行：</strong>标题行（列名，如：Class, English, Chinese, Japanese等）</li>
+                        <li><strong>第一列：</strong>Class（分类，如：Trade、CrossCulture等）</li>
+                        <li><strong>后续列：</strong>不同语言的词汇列（如：English, Chinese, Japanese等）</li>
                     </ul>
                     <div class="example">
                         <strong>示例（CSV格式）：</strong><br>
-                        情感,中文,快乐<br>
-                        情感,中文,悲伤<br>
-                        情感,英文,Happiness<br>
-                        认知,中文,思考<br>
-                        认知,英文,Thinking
+                        Class,English,Chinese,Japanese<br>
+                        Trade,Trade,贸易,貿易<br>
+                        Trade,Export,出口,輸出<br>
+                        Trade,Import,进口,輸入<br>
+                        CrossCulture,Trust,信任,信頼<br>
+                        CrossCulture,Relationship,关系,関係
                     </div>
+                    <p><small>注意：每种语言的词汇将分别作为独立节点进行分析，热力图只比较词汇不比较Class</small></p>
                 </div>
             </div>
         </div>
@@ -77,16 +79,17 @@
                 </div>
 
                 <div class="viz-card">
-                    <h3>🕸️ 语义网络图（交互式）</h3>
-                    <div class="network-controls">
-                        <label for="networkThreshold">相似度阈值: <span id="thresholdValue">0.30</span></label>
-                        <input type="range" id="networkThreshold" min="0" max="1" step="0.05" value="0.3">
-                        <div id="networkLoading" class="network-loading hidden">正在更新网络图...</div>
+                    <h3>🕸️ 语义网络图 - 加权度中心性</h3>
+                    <div class="image-container">
+                        <img id="networkDegreeImg" src="" alt="加权度中心性网络图">
                     </div>
-                    <div class="network-container">
-                        <div id="networkContainer" style="width: 100%; height: 800px; border: 1px solid #2d3142; border-radius: 8px; background: #1a1d29;"></div>
+                </div>
+
+                <div class="viz-card">
+                    <h3>🕸️ 语义网络图 - 加权特征向量中心性</h3>
+                    <div class="image-container">
+                        <img id="networkEigenImg" src="" alt="加权特征向量中心性网络图">
                     </div>
-                    <div id="networkLegend" class="network-legend"></div>
                 </div>
 
                 <div class="viz-card">

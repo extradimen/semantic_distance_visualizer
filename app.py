@@ -16,13 +16,16 @@ import pickle
 import pandas as pd
 from datetime import datetime
 
-# 配置中文字体
+# 配置中文字体 - 优先使用系统可用的中文字体
 plt.rcParams['font.sans-serif'] = [
-    'WenQuanYi Micro Hei',  # 文泉驿微米黑
+    'Noto Sans CJK SC',      # Noto Sans 中文字体（优先）
+    'Noto Sans CJK JP',      # Noto Sans 日文字体（也支持中文）
+    'WenQuanYi Micro Hei',   # 文泉驿微米黑
     'WenQuanYi Zen Hei',     # 文泉驿正黑
     'SimHei',                # 黑体
     'SimSun',                # 宋体
     'Microsoft YaHei',       # 微软雅黑
+    'Source Han Sans SC',    # 思源黑体
     'DejaVu Sans',           # 备用字体
     'Arial',
     'sans-serif'
@@ -85,7 +88,9 @@ except Exception as e:
 
 def parse_vocabulary_file(file_path, filename):
     """解析上传的词汇文件，支持CSV和Excel格式
-    返回: list of dict, 每个dict包含 {'category': 分类, 'language': 语言, 'word': 词汇}
+    格式：第一行是标题（跳过），第一列Class，后续列为不同语言的词汇列（English, Chinese, Japanese等）
+    返回: list of dict, 每个dict包含 {'category': 分类, 'word': 词汇, 'language': 语言}
+    每种语言的词汇分别作为独立节点
     """
     data = []
     
@@ -93,42 +98,53 @@ def parse_vocabulary_file(file_path, filename):
     if filename.endswith('.xlsx') or filename.endswith('.xls'):
         # Excel文件
         try:
-            df = pd.read_excel(file_path, header=None)
+            df = pd.read_excel(file_path, header=0)  # 第一行作为标题
         except Exception as e:
             raise ValueError(f"无法读取Excel文件: {str(e)}")
     elif filename.endswith('.csv'):
         # CSV文件
         try:
-            df = pd.read_csv(file_path, header=None, encoding='utf-8')
+            df = pd.read_csv(file_path, header=0, encoding='utf-8')  # 第一行作为标题
         except UnicodeDecodeError:
             # 尝试其他编码
-            df = pd.read_csv(file_path, header=None, encoding='gbk')
+            df = pd.read_csv(file_path, header=0, encoding='gbk')
     else:
         raise ValueError("不支持的文件格式，请上传CSV或Excel文件")
     
     # 检查列数
-    if df.shape[1] < 3:
-        raise ValueError("文件必须包含至少3列：分类、语言、词汇")
+    if df.shape[1] < 2:
+        raise ValueError("文件必须包含至少2列：Class和至少一种语言的词汇列")
     
-    # 解析数据
+    # 获取列名（第一行标题）
+    columns = df.columns.tolist()
+    
+    # 第一列是Class（分类）
+    class_col = columns[0]
+    
+    # 从第二列开始是语言列（English, Chinese, Japanese等）
+    language_cols = columns[1:]
+    
+    # 解析数据：每种语言的词汇分别作为独立节点
     for idx, row in df.iterrows():
-        category = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
-        language = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
-        word = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
+        category = str(row[class_col]).strip() if pd.notna(row[class_col]) else ''
         
-        # 跳过空行
-        if not category and not language and not word:
+        # 跳过空行（分类为空且所有词汇都为空）
+        if not category:
             continue
         
-        # 验证数据
-        if not word:
-            continue
-        
-        data.append({
-            'category': category,
-            'language': language,
-            'word': word
-        })
+        # 处理每种语言的词汇列
+        for lang_col in language_cols:
+            word = str(row[lang_col]).strip() if pd.notna(row[lang_col]) else ''
+            
+            # 如果词汇不为空，添加节点
+            if word:
+                # 从列名推断语言（如 "English" -> "English", "Chinese" -> "Chinese"）
+                language = lang_col.strip()
+                data.append({
+                    'category': category,
+                    'word': word,
+                    'language': language
+                })
     
     if len(data) == 0:
         raise ValueError("文件中没有有效数据")
@@ -184,7 +200,7 @@ def generate_heatmap(data_list, embeddings_dict, output_path):
                     square=True,
                     annot_kws={'size': 8})
         plt.title(f'词汇语义相似度热力图 - {group_key[0]} ({group_key[1]})', 
-                 fontsize=20, pad=20, fontweight='bold')
+                 fontsize=20, pad=20, fontweight='bold', fontfamily='sans-serif')
     else:
         # 多个分组，生成子图 - 纵向排列（多行）
         fig, axes = plt.subplots(num_groups, 1, figsize=(20, 16 * num_groups))
@@ -207,30 +223,34 @@ def generate_heatmap(data_list, embeddings_dict, output_path):
                         square=True,
                         annot_kws={'size': 8},
                         ax=ax)
-            ax.set_title(f'{group_key[0]} ({group_key[1]})', fontsize=18, fontweight='bold', pad=15)
-            ax.set_xlabel('词汇', fontsize=14)
-            ax.set_ylabel('词汇', fontsize=14)
+            ax.set_title(f'{group_key[0]} ({group_key[1]})', fontsize=18, fontweight='bold', pad=15, fontfamily='sans-serif')
+            ax.set_xlabel('词汇', fontsize=14, fontfamily='sans-serif')
+            ax.set_ylabel('词汇', fontsize=14, fontfamily='sans-serif')
             plt.setp(ax.get_xticklabels(), rotation=45, ha='right', fontsize=10)
             plt.setp(ax.get_yticklabels(), rotation=0, fontsize=10)
         
         plt.suptitle('词汇语义相似度热力图（按分类和语言分组）', 
-                    fontsize=22, fontweight='bold', y=0.995)
+                    fontsize=22, fontweight='bold', y=0.995, fontfamily='sans-serif')
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
     return output_path
 
-def generate_network_graph(data_list, embeddings_dict, output_path, threshold=0.3):
-    """生成语义网络图 - 按分类着色，节点大小基于度中心性"""
+def generate_network_graph_weighted(data_list, embeddings_dict, output_path, threshold=0.3, centrality_type='degree'):
+    """生成语义网络图 - 按分类着色，节点大小基于加权中心性
+    centrality_type: 'degree' 或 'eigenvector'
+    """
     G = nx.Graph()
     
     # 获取所有词汇
     words = [item['word'] for item in data_list]
     categories = [item['category'] for item in data_list]
+    languages = [item.get('language', '') for item in data_list]
     
-    # 创建词汇到分类的映射
+    # 创建词汇到分类和语言的映射
     word_to_category = {item['word']: item['category'] for item in data_list}
+    word_to_language = {item['word']: item.get('language', '') for item in data_list}
     
     # 获取所有唯一分类
     unique_categories = list(set(categories))
@@ -239,7 +259,7 @@ def generate_network_graph(data_list, embeddings_dict, output_path, threshold=0.
     for word in words:
         G.add_node(word)
     
-    # 添加边（只连接相似度高于阈值的词汇对）
+    # 添加边（只连接相似度高于阈值的词汇对，权重=相似度）
     embeddings = [embeddings_dict[word] for word in words]
     similarity_matrix = cosine_similarity(embeddings)
     
@@ -249,45 +269,66 @@ def generate_network_graph(data_list, embeddings_dict, output_path, threshold=0.
             if similarity > threshold:
                 G.add_edge(words[i], words[j], weight=similarity)
     
-    # 绘制网络图 - 学术专业风格，浅色背景
+    # 计算加权中心性
+    if centrality_type == 'degree':
+        # 加权度中心性：所有连接权重的和
+        centrality = {}
+        for node in G.nodes():
+            total_weight = sum(G[node][neighbor]['weight'] for neighbor in G.neighbors(node))
+            centrality[node] = total_weight
+        title_suffix = '加权度中心性'
+    else:  # eigenvector
+        # 加权特征向量中心性
+        try:
+            centrality = nx.eigenvector_centrality(G, weight='weight', max_iter=1000)
+        except:
+            # 如果迭代失败，使用度中心性作为备选
+            centrality = {}
+            for node in G.nodes():
+                total_weight = sum(G[node][neighbor]['weight'] for neighbor in G.neighbors(node))
+                centrality[node] = total_weight
+        title_suffix = '加权特征向量中心性'
+    
+    # 归一化中心性值（用于节点大小）
+    if centrality:
+        max_centrality = max(centrality.values())
+        min_centrality = min(centrality.values())
+        centrality_range = max_centrality - min_centrality if max_centrality > min_centrality else 1
+    else:
+        max_centrality = 1
+        min_centrality = 0
+        centrality_range = 1
+    
+    # 绘制网络图
     fig = plt.figure(figsize=(20, 16), facecolor='white')
     ax = fig.add_subplot(111, facecolor='white')
     
-    # 使用力导向布局算法，优化参数
+    # 使用力导向布局算法
     pos = nx.spring_layout(G, k=2.5, iterations=150, seed=42)
     
-    # 计算节点度中心性
-    degrees = dict(G.degree())
-    max_degree = max(degrees.values()) if degrees else 1
-    min_degree = min(degrees.values()) if degrees else 0
-    
-    # 绘制边 - 简洁专业风格
+    # 绘制边 - 粗细表示权重
     edges = G.edges()
     weights = [G[u][v]['weight'] for u, v in edges]
     
-    # 使用简洁的边样式
     from matplotlib.collections import LineCollection
     
     edge_positions = []
-    edge_alphas = []
     edge_widths = []
     
     for (u, v), weight in zip(edges, weights):
         x1, y1 = pos[u]
         x2, y2 = pos[v]
         edge_positions.append([(x1, y1), (x2, y2)])
-        # 根据权重设置透明度和宽度
-        edge_alphas.append(weight * 0.4 + 0.2)  # 透明度基于权重
-        edge_widths.append(weight * 2.5 + 0.5)   # 宽度基于权重
+        # 边的宽度基于权重（相似度）
+        edge_widths.append(weight * 3 + 0.5)  # 宽度范围：0.5-3.5
     
     if edge_positions:
-        # 使用统一的灰色，通过透明度区分权重
-        edge_colors = [(0.4, 0.4, 0.4, alpha) for alpha in edge_alphas]
+        edge_colors = [(0.4, 0.4, 0.4, 0.6) for _ in edge_positions]
         lc = LineCollection(edge_positions, colors=edge_colors, linewidths=edge_widths, 
                            capstyle='round', alpha=0.6)
         ax.add_collection(lc)
     
-    # 绘制节点 - 按分类着色，大小基于度中心性
+    # 绘制节点 - 按分类着色，大小基于加权中心性
     node_sizes_ordered = []
     node_colors_ordered = []
     
@@ -295,20 +336,18 @@ def generate_network_graph(data_list, embeddings_dict, output_path, threshold=0.
     import matplotlib.cm as cm
     category_colors = {}
     if len(unique_categories) == 1:
-        # 只有一个分类，使用单一颜色
         category_colors[unique_categories[0]] = (0.2, 0.4, 0.8)
     else:
-        # 多个分类，使用不同颜色
         colors = cm.Set3(np.linspace(0, 1, len(unique_categories)))
         for idx, cat in enumerate(unique_categories):
-            category_colors[cat] = colors[idx][:3]  # RGB only
+            category_colors[cat] = colors[idx][:3]
     
-    # 使用度中心性设置节点大小，按分类设置颜色
+    # 使用加权中心性设置节点大小，按分类设置颜色
     for node in G.nodes():
-        degree = degrees.get(node, 0)
-        # 节点大小：度越大，节点越大
-        normalized_degree = (degree - min_degree) / (max_degree - min_degree) if max_degree > min_degree else 0.5
-        node_size = 500 + normalized_degree * 2000  # 最小500，最大2500
+        cent_value = centrality.get(node, 0)
+        # 节点大小：中心性越大，节点越大（区分度要大）
+        normalized_cent = (cent_value - min_centrality) / centrality_range if centrality_range > 0 else 0.5
+        node_size = 300 + normalized_cent * 2700  # 最小300，最大3000（区分度大）
         node_sizes_ordered.append(node_size)
         
         # 节点颜色：按分类
@@ -326,82 +365,57 @@ def generate_network_graph(data_list, embeddings_dict, output_path, threshold=0.
                            edgecolors='#2c3e50',
                            linewidths=1.5)
     
-    # 绘制标签 - 文字在节点内部，透明背景，颜色与节点匹配，大小动态适配
-    chinese_font = 'WenQuanYi Micro Hei'
+    # 绘制标签 - 使用节点原始语言
+    chinese_font = 'sans-serif'
     try:
         available_fonts = [f.name for f in fm.fontManager.ttflist]
-        if 'WenQuanYi Micro Hei' not in available_fonts:
-            if 'WenQuanYi Zen Hei' in available_fonts:
-                chinese_font = 'WenQuanYi Zen Hei'
-            else:
-                chinese_font = 'sans-serif'
+        font_priority = [
+            'Noto Sans CJK SC', 'Noto Sans CJK JP', 'Source Han Sans SC',
+            'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'SimHei', 'SimSun', 'Microsoft YaHei'
+        ]
+        for font_name in font_priority:
+            if font_name in available_fonts:
+                chinese_font = font_name
+                break
     except:
         chinese_font = 'sans-serif'
     
-    # 计算文字大小和颜色的映射
     for idx, (node, (x, y)) in enumerate(pos.items()):
-        degree = degrees.get(node, 0)
         node_size = node_sizes_ordered[idx]
         node_color = node_colors_ordered[idx]
+        language = word_to_language.get(node, '')
         
-        # 根据节点大小和文字长度动态计算字体大小
-        base_font_size = 8 + (node_size / 2500) * 12  # 基础字体大小：8-20
+        # 根据节点大小动态计算字体大小
+        base_font_size = 8 + (node_size / 3000) * 14
         text_length = len(node)
-        # 长文字适当减小字体
         if text_length > 8:
             font_size = base_font_size * (8 / text_length) * 0.9
-        elif text_length > 5:
-            font_size = base_font_size * 0.95
         else:
             font_size = base_font_size
         
-        # 确保字体大小在合理范围内
-        font_size = max(7, min(18, font_size))
+        font_size = max(8, min(22, font_size))
         
-        # 根据节点颜色计算文字颜色（确保对比度）
-        r, g, b = node_color
-        brightness = (r * 0.299 + g * 0.587 + b * 0.114)
-        if brightness > 0.5:
-            text_color = '#2c3e50'  # 深色文字
+        # 根据节点颜色选择文字颜色（确保对比度）
+        if sum(node_color) / 3 > 0.5:  # 浅色背景
+            text_color = '#2c3e50'
+        else:  # 深色背景
+            text_color = '#ffffff'
+        
+        # 使用对应语言的字体
+        if language == 'Chinese' or any('\u4e00' <= char <= '\u9fff' for char in node):
+            font_family = chinese_font
         else:
-            text_color = '#ffffff'  # 浅色文字
+            font_family = 'Arial'
         
-        # 绘制文字，透明背景，在节点内部
-        ax.text(x, y, node, 
-               fontsize=font_size, 
-               fontfamily=chinese_font,
-               ha='center', 
-               va='center',
-               color=text_color,
-               weight='600',
-               # 不使用bbox，让文字直接在节点上
-               zorder=10)  # 确保文字在节点上方
+        ax.text(x, y, node, fontsize=font_size, ha='center', va='center',
+                color=text_color, fontweight='bold', fontfamily=font_family,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor=node_color, 
+                         alpha=0.7, edgecolor='none'))
     
-    # 添加图例
-    if len(unique_categories) > 1:
-        from matplotlib.patches import Patch
-        legend_elements = [Patch(facecolor=category_colors[cat], label=cat) 
-                          for cat in unique_categories]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=10)
-    
-    # 设置标题和样式
-    ax.set_title(f'词汇语义网络图 (相似度阈值: {threshold})', 
-                fontsize=18, 
-                pad=20, 
-                fontweight='600',
-                color='#2c3e50', 
-                family=chinese_font)
-    
-    # 设置坐标轴样式
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['bottom'].set_visible(False)
-    ax.spines['left'].set_visible(False)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    
+    plt.title(f'语义网络图 - {title_suffix}', fontsize=20, pad=20, fontweight='bold', fontfamily=chinese_font)
+    plt.axis('off')
     plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+    plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
     return output_path
 
@@ -447,18 +461,30 @@ def generate_mds_plot(data_list, embeddings_dict, output_path):
                        s=400, alpha=0.6, c=[color], 
                        edgecolors='black', linewidths=1, label=category)
     
-    # 配置中文字体
+    # 配置中文字体 - 使用和网络图相同的字体检测逻辑
     font_prop = fm.FontProperties()
-    chinese_font = 'WenQuanYi Micro Hei'
+    chinese_font_mds = 'sans-serif'
     try:
         available_fonts = [f.name for f in fm.fontManager.ttflist]
-        if 'WenQuanYi Micro Hei' in available_fonts:
-            font_prop.set_family('WenQuanYi Micro Hei')
-        elif 'WenQuanYi Zen Hei' in available_fonts:
-            font_prop.set_family('WenQuanYi Zen Hei')
-        else:
-            font_prop.set_family('sans-serif')
-    except:
+        # 按优先级查找中文字体
+        font_priority = [
+            'Noto Sans CJK SC',
+            'Noto Sans CJK JP',
+            'Source Han Sans SC',
+            'WenQuanYi Micro Hei',
+            'WenQuanYi Zen Hei',
+            'SimHei',
+            'SimSun',
+            'Microsoft YaHei'
+        ]
+        for font_name in font_priority:
+            if font_name in available_fonts:
+                chinese_font_mds = font_name
+                break
+        font_prop.set_family(chinese_font_mds)
+        print(f'MDS图使用字体: {chinese_font_mds}')
+    except Exception as e:
+        print(f'MDS图字体检测失败: {e}, 使用默认字体')
         font_prop.set_family('sans-serif')
     
     # 添加标签
@@ -470,11 +496,11 @@ def generate_mds_plot(data_list, embeddings_dict, output_path):
     
     # 添加图例
     if len(unique_categories) > 1:
-        plt.legend(loc='upper right', fontsize=11, framealpha=0.9)
+        plt.legend(loc='upper right', fontsize=11, framealpha=0.9, prop=font_prop)
     
-    plt.title('词汇语义空间2D可视化 (MDS降维)', fontsize=20, pad=20, fontweight='bold')
-    plt.xlabel('维度1', fontsize=14, fontweight='bold')
-    plt.ylabel('维度2', fontsize=14, fontweight='bold')
+    plt.title('词汇语义空间2D可视化 (MDS降维)', fontsize=20, pad=20, fontweight='bold', fontfamily=chinese_font_mds)
+    plt.xlabel('维度1', fontsize=14, fontweight='bold', fontfamily=chinese_font_mds)
+    plt.ylabel('维度2', fontsize=14, fontweight='bold', fontfamily=chinese_font_mds)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
@@ -531,11 +557,18 @@ def upload_file():
             generate_heatmap(data_list, embeddings_dict, heatmap_path)
             results['heatmap'] = f'/results/heatmap_{result_timestamp}.png'
             
-            # 2. 网络图（按分类着色）
-            network_path = os.path.join(app.config['RESULTS_FOLDER'], f'network_{result_timestamp}.png')
+            # 2. 网络图（两个图：加权度中心性和加权特征向量中心性）
             threshold = float(request.form.get('threshold', 0.3))
-            generate_network_graph(data_list, embeddings_dict, network_path, threshold)
-            results['network'] = f'/results/network_{result_timestamp}.png'
+            
+            # 加权度中心性网络图
+            network_degree_path = os.path.join(app.config['RESULTS_FOLDER'], f'network_degree_{result_timestamp}.png')
+            generate_network_graph_weighted(data_list, embeddings_dict, network_degree_path, threshold, 'degree')
+            results['network_degree'] = f'/results/network_degree_{result_timestamp}.png'
+            
+            # 加权特征向量中心性网络图
+            network_eigen_path = os.path.join(app.config['RESULTS_FOLDER'], f'network_eigen_{result_timestamp}.png')
+            generate_network_graph_weighted(data_list, embeddings_dict, network_eigen_path, threshold, 'eigenvector')
+            results['network_eigen'] = f'/results/network_eigen_{result_timestamp}.png'
             
             # 3. MDS 2D可视化（按分类着色）
             mds_path = os.path.join(app.config['RESULTS_FOLDER'], f'mds_{result_timestamp}.png')
@@ -661,7 +694,7 @@ def get_network_data():
             nodes.append({
                 'id': i,
                 'label': word,
-                'value': degree + 1,  # 节点大小
+                'value': degree + 1,  # 节点大小基于度中心性（连接数），度越大节点越大
                 'group': unique_categories.index(category),  # 分类组
                 'category': category,
                 'title': f'{word}\n分类: {category}\n连接数: {degree}'
