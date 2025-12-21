@@ -55,6 +55,6 @@ results/*
 .DS_Store
 Thumbs.db
 
-# Model cache (optional - uncomment if you don't want to track model downloads)
-# .cache/
+# Model cache - 模型会自动下载，不应提交到仓库
+.cache/
 
