@@ -89,8 +89,17 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
+        // 检查幂次是否有效
+        const powerInput = document.getElementById('power');
+        const power = parseFloat(powerInput.value);
+        if (isNaN(power) || power < 1 || power > 10) {
+            showError('幂次必须是1到10之间的数字');
+            return;
+        }
+        
         const formData = new FormData(form);
         formData.append('threshold', threshold);
+        formData.append('power', power);
 
         // 隐藏之前的结果和错误
         results.classList.add('hidden');

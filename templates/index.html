@@ -32,6 +32,12 @@
                         <small>只显示相似度高于此值的词汇连接（分析前指定，上传后不可修改）</small>
                     </div>
                     
+                    <div class="form-group">
+                        <label for="power">节点大小映射幂次:</label>
+                        <input type="number" id="power" name="power" value="5" min="1" max="10" step="0.5" required>
+                        <small>控制节点大小的非线性映射（1=线性，2=平方，3=立方，数值越大高值节点差异越明显）</small>
+                    </div>
+                    
                     <button type="button" class="btn-primary" id="submitBtn">
                         <span class="btn-text">🚀 开始分析</span>
                     </button>
@@ -83,6 +89,16 @@
                     <div class="image-container">
                         <img id="networkDegreeImg" src="" alt="加权度中心性网络图">
                     </div>
+                    <div class="explanation-text">
+                        <p><strong>原理说明：</strong></p>
+                        <p>本图使用<strong>力导向布局算法（Fruchterman-Reingold）</strong>自动计算节点位置。节点位置由节点间的连接关系决定：</p>
+                        <ul>
+                            <li><strong>节点位置：</strong>通过力导向算法计算，相似度高的词汇（连接权重大的节点）会聚集在一起，相似度低的词汇会分散开</li>
+                            <li><strong>节点大小：</strong>表示<strong>加权度中心性</strong>，即该节点所有连接边的权重（相似度）之和。节点越大，说明该词与更多词汇有高相似度，在语义网络中越重要</li>
+                            <li><strong>节点颜色：</strong>按Class分类着色，相同分类的词汇使用相同颜色</li>
+                            <li><strong>边的粗细：</strong>表示两个词汇间的语义相似度，越粗表示相似度越高</li>
+                        </ul>
+                    </div>
                 </div>
 
                 <div class="viz-card">
@@ -90,12 +106,32 @@
                     <div class="image-container">
                         <img id="networkEigenImg" src="" alt="加权特征向量中心性网络图">
                     </div>
+                    <div class="explanation-text">
+                        <p><strong>原理说明：</strong></p>
+                        <p>本图同样使用<strong>力导向布局算法</strong>计算节点位置，但节点大小基于<strong>加权特征向量中心性</strong>：</p>
+                        <ul>
+                            <li><strong>节点位置：</strong>与上图相同，由力导向算法根据连接关系自动计算</li>
+                            <li><strong>节点大小：</strong>表示<strong>加权特征向量中心性</strong>，不仅考虑该节点自身的连接权重，还考虑其邻居节点的重要性。一个节点如果连接到很多重要的节点，其中心性也会更高。这种方法能识别出网络中的"关键枢纽"节点</li>
+                            <li><strong>节点颜色：</strong>按Class分类着色</li>
+                            <li><strong>边的粗细：</strong>表示两个词汇间的语义相似度</li>
+                        </ul>
+                    </div>
                 </div>
 
                 <div class="viz-card">
                     <h3>📍 语义空间2D可视化（按分类着色）</h3>
                     <div class="image-container">
                         <img id="mdsImg" src="" alt="MDS可视化">
+                    </div>
+                    <div class="explanation-text">
+                        <p><strong>原理说明：</strong></p>
+                        <p>本图使用<strong>多维尺度分析（MDS）</strong>将高维语义空间降维到2D平面：</p>
+                        <ul>
+                            <li><strong>散点位置：</strong>每个词汇在2D平面上的位置由其语义嵌入向量决定。语义相似度高的词汇在空间中距离较近，语义相似度低的词汇距离较远。位置本身没有绝对意义，但<strong>相对位置反映了词汇间的语义关系</strong></li>
+                            <li><strong>文本框背景色：</strong>按Class分类着色，相同分类的词汇使用相同颜色</li>
+                            <li><strong>连接线：</strong>同一行出现的词（如中文和英文对应词）用灰色细线连接，便于识别跨语言的对应关系</li>
+                            <li><strong>散点大小：</strong>所有散点大小相同，仅用于标识位置</li>
+                        </ul>
                     </div>
                 </div>
             </div>

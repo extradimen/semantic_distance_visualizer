@@ -296,6 +296,38 @@ header h1 {
     padding: 20px;
     border-radius: 8px;
     border: 1px solid #e2e8f0;
+    margin-bottom: 20px;
+}
+
+.explanation-text {
+    margin-top: 20px;
+    padding: 20px;
+    background: #f8fafc;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    color: #475569;
+    font-size: 0.95em;
+    line-height: 1.8;
+}
+
+.explanation-text p {
+    margin-bottom: 12px;
+}
+
+.explanation-text p:first-child {
+    font-size: 1.1em;
+    color: #1a202c;
+    margin-bottom: 15px;
+}
+
+.explanation-text ul {
+    margin-left: 20px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+.explanation-text li {
+    margin-bottom: 8px;
 }
 
 .image-container img {

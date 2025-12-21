@@ -143,7 +143,8 @@ def parse_vocabulary_file(file_path, filename):
                 data.append({
                     'category': category,
                     'word': word,
-                    'language': language
+                    'language': language,
+                    'row_index': idx  # 记录原始行号，用于识别同一行的词
                 })
     
     if len(data) == 0:
@@ -237,9 +238,10 @@ def generate_heatmap(data_list, embeddings_dict, output_path):
     plt.close()
     return output_path
 
-def generate_network_graph_weighted(data_list, embeddings_dict, output_path, threshold=0.3, centrality_type='degree'):
+def generate_network_graph_weighted(data_list, embeddings_dict, output_path, threshold=0.3, centrality_type='degree', power=5):
     """生成语义网络图 - 按分类着色，节点大小基于加权中心性
     centrality_type: 'degree' 或 'eigenvector'
+    power: 节点大小映射的幂次（1=线性，2=平方，3=立方等）
     """
     G = nx.Graph()
     
@@ -290,14 +292,28 @@ def generate_network_graph_weighted(data_list, embeddings_dict, output_path, thr
         title_suffix = '加权特征向量中心性'
     
     # 归一化中心性值（用于节点大小）
-    if centrality:
-        max_centrality = max(centrality.values())
-        min_centrality = min(centrality.values())
+    if centrality and len(centrality) > 0:
+        cent_values = list(centrality.values())
+        max_centrality = max(cent_values)
+        min_centrality = min(cent_values)
         centrality_range = max_centrality - min_centrality if max_centrality > min_centrality else 1
+        
+        # 调试信息
+        print(f"节点数量: {len(centrality)}")
+        print(f"中心性范围: min={min_centrality:.4f}, max={max_centrality:.4f}, range={centrality_range:.4f}")
+        
+        # 如果所有节点中心性为0（没有连接），给出警告
+        if max_centrality == 0:
+            print("警告: 所有节点中心性为0，可能阈值太高导致没有连接")
+            centrality_range = 1  # 避免除以0
+        elif centrality_range == 0:
+            print("警告: 所有节点中心性相同，节点大小将相同")
+            centrality_range = 1  # 避免除以0
     else:
         max_centrality = 1
         min_centrality = 0
         centrality_range = 1
+        print("警告: 中心性字典为空")
     
     # 绘制网络图
     fig = plt.figure(figsize=(20, 16), facecolor='white')
@@ -343,11 +359,31 @@ def generate_network_graph_weighted(data_list, embeddings_dict, output_path, thr
             category_colors[cat] = colors[idx][:3]
     
     # 使用加权中心性设置节点大小，按分类设置颜色
-    for node in G.nodes():
+    # 确保节点顺序与绘制顺序一致
+    nodes = list(G.nodes())
+    
+    # 调试信息：打印中心性值范围
+    if centrality:
+        cent_values = list(centrality.values())
+        print(f"中心性统计: min={min(cent_values):.4f}, max={max(cent_values):.4f}, range={centrality_range:.4f}")
+        print(f"中心性值示例: {dict(list(centrality.items())[:5])}")
+    
+    for node in nodes:
         cent_value = centrality.get(node, 0)
-        # 节点大小：中心性越大，节点越大（区分度要大）
-        normalized_cent = (cent_value - min_centrality) / centrality_range if centrality_range > 0 else 0.5
-        node_size = 300 + normalized_cent * 2700  # 最小300，最大3000（区分度大）
+        # 节点大小：中心性越大，节点越大（使用幂次映射，放大高值差异）
+        if centrality_range > 0:
+            normalized_cent = (cent_value - min_centrality) / centrality_range
+            # 使用幂次映射：让高值节点的差异更明显
+            # 例如：power=2时，normalized=0.25 -> 0.0625, normalized=1.0 -> 1.0
+            # power=3时，normalized=0.25 -> 0.015625, normalized=1.0 -> 1.0
+            # 幂次越大，高值节点的差异会被放大得越明显
+            powered_normalized = normalized_cent ** power
+        else:
+            # 如果所有节点中心性相同，使用固定大小
+            powered_normalized = 0.5
+            print(f"警告: 所有节点中心性相同或为0，使用默认大小")
+        
+        node_size = 300 + powered_normalized * 4700  # 最小300，最大5000（使用幂次映射）
         node_sizes_ordered.append(node_size)
         
         # 节点颜色：按分类
@@ -355,7 +391,6 @@ def generate_network_graph_weighted(data_list, embeddings_dict, output_path, thr
         node_colors_ordered.append(category_colors.get(category, (0.2, 0.4, 0.8)))
     
     # 绘制节点
-    nodes = list(G.nodes())
     nx.draw_networkx_nodes(G, pos, 
                            nodelist=nodes,
                            node_size=node_sizes_ordered, 
@@ -380,13 +415,17 @@ def generate_network_graph_weighted(data_list, embeddings_dict, output_path, thr
     except:
         chinese_font = 'sans-serif'
     
-    for idx, (node, (x, y)) in enumerate(pos.items()):
+    # 确保节点顺序一致：使用 nodes 列表的顺序，而不是 pos.items() 的顺序
+    for idx, node in enumerate(nodes):
+        if node not in pos:
+            continue
+        x, y = pos[node]
         node_size = node_sizes_ordered[idx]
         node_color = node_colors_ordered[idx]
         language = word_to_language.get(node, '')
         
         # 根据节点大小动态计算字体大小
-        base_font_size = 8 + (node_size / 3000) * 14
+        base_font_size = 8 + (node_size / 5000) * 14
         text_length = len(node)
         if text_length > 8:
             font_size = base_font_size * (8 / text_length) * 0.9
@@ -487,12 +526,38 @@ def generate_mds_plot(data_list, embeddings_dict, output_path):
         print(f'MDS图字体检测失败: {e}, 使用默认字体')
         font_prop.set_family('sans-serif')
     
-    # 添加标签
+    # 创建词汇到分类的映射（用于文本框背景色）
+    word_to_category = {item['word']: item['category'] for item in data_list}
+    
+    # 连接同一行的词（相同row_index）
+    # 按row_index分组，找出同一行的词
+    row_groups = {}
+    for i, item in enumerate(data_list):
+        row_idx = item.get('row_index', i)  # 如果没有row_index，使用索引作为fallback
+        if row_idx not in row_groups:
+            row_groups[row_idx] = []
+        row_groups[row_idx].append(i)  # 存储索引
+    
+    # 绘制连接线（同一行的词）
+    for row_idx, indices in row_groups.items():
+        if len(indices) > 1:  # 只有同一行有多个词时才连接
+            # 获取这些词的坐标
+            row_coords = coords[indices]
+            # 绘制连接线
+            for i in range(len(indices) - 1):
+                for j in range(i + 1, len(indices)):
+                    plt.plot([row_coords[i, 0], row_coords[j, 0]], 
+                            [row_coords[i, 1], row_coords[j, 1]], 
+                            'k-', alpha=0.3, linewidth=1, zorder=0)  # 灰色细线，在底层
+    
+    # 添加标签（文本框背景色按分类填充）
     for i, word in enumerate(words):
+        category = word_to_category.get(word, unique_categories[0])
+        category_color = category_colors.get(category, (0.2, 0.4, 0.8))
         plt.annotate(word, (coords[i, 0], coords[i, 1]), 
                     fontsize=12, ha='center', va='center',
                     fontproperties=font_prop,
-                    bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8, edgecolor='gray'))
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor=category_color, alpha=0.8, edgecolor='gray'))
     
     # 添加图例
     if len(unique_categories) > 1:
@@ -559,15 +624,16 @@ def upload_file():
             
             # 2. 网络图（两个图：加权度中心性和加权特征向量中心性）
             threshold = float(request.form.get('threshold', 0.3))
+            power = float(request.form.get('power', 5))
             
             # 加权度中心性网络图
             network_degree_path = os.path.join(app.config['RESULTS_FOLDER'], f'network_degree_{result_timestamp}.png')
-            generate_network_graph_weighted(data_list, embeddings_dict, network_degree_path, threshold, 'degree')
+            generate_network_graph_weighted(data_list, embeddings_dict, network_degree_path, threshold, 'degree', power)
             results['network_degree'] = f'/results/network_degree_{result_timestamp}.png'
             
             # 加权特征向量中心性网络图
             network_eigen_path = os.path.join(app.config['RESULTS_FOLDER'], f'network_eigen_{result_timestamp}.png')
-            generate_network_graph_weighted(data_list, embeddings_dict, network_eigen_path, threshold, 'eigenvector')
+            generate_network_graph_weighted(data_list, embeddings_dict, network_eigen_path, threshold, 'eigenvector', power)
             results['network_eigen'] = f'/results/network_eigen_{result_timestamp}.png'
             
             # 3. MDS 2D可视化（按分类着色）
