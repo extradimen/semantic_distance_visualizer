@@ -1,0 +1,4 @@
+Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
+Requirement already satisfied: plotly in ./.venv/lib/python3.12/site-packages (6.5.0)
+Requirement already satisfied: narwhals>=1.15.1 in ./.venv/lib/python3.12/site-packages (from plotly) (2.14.0)
+Requirement already satisfied: packaging in ./.venv/lib/python3.12/site-packages (from plotly) (25.0)

@@ -182,6 +182,15 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('mdsImg').src = data.mds;
         }
 
+        // 显示3D MDS图
+        const mds3dIframe = document.getElementById('mds3dIframe');
+        if (mds3dIframe && data.mds_3d) {
+            mds3dIframe.src = data.mds_3d;
+            mds3dIframe.onload = function() {
+                console.log('3D MDS图加载完成');
+            };
+        }
+
         // 显示网络图（两个静态图）
         const networkDegreeImg = document.getElementById('networkDegreeImg');
         if (networkDegreeImg && data.network_degree) {
@@ -216,6 +225,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
                 tableBody.appendChild(row);
             });
+        }
+
+        // 显示Excel下载按钮
+        const downloadExcelBtn = document.getElementById('downloadExcelBtn');
+        if (downloadExcelBtn && data.excel_download) {
+            downloadExcelBtn.style.display = 'inline-block';
+            downloadExcelBtn.onclick = function() {
+                window.location.href = data.excel_download;
+            };
         }
 
         // 显示结果区域

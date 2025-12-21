@@ -572,6 +572,182 @@ def generate_mds_plot(data_list, embeddings_dict, output_path):
     plt.close()
     return output_path
 
+def generate_mds_3d_plot(data_list, embeddings_dict, output_path):
+    """使用MDS降维生成3D交互式可视化 - 按分类着色"""
+    from sklearn.manifold import MDS
+    import plotly.graph_objects as go
+    import plotly.express as px
+    
+    words = [item['word'] for item in data_list]
+    categories = [item['category'] for item in data_list]
+    languages = [item.get('language', '') for item in data_list]
+    unique_categories = list(set(categories))
+    
+    # 获取嵌入向量
+    embeddings = [embeddings_dict[word] for word in words]
+    
+    print("正在进行3D MDS降维...")
+    mds = MDS(n_components=3, dissimilarity='precomputed', random_state=42)
+    
+    # 计算距离矩阵
+    from sklearn.metrics.pairwise import euclidean_distances
+    distance_matrix = euclidean_distances(embeddings)
+    
+    coords = mds.fit_transform(distance_matrix)
+    
+    # 为每个分类分配颜色
+    import matplotlib.cm as cm
+    category_colors = {}
+    if len(unique_categories) == 1:
+        category_colors[unique_categories[0]] = 'rgb(51, 102, 204)'
+    else:
+        colors = cm.Set3(np.linspace(0, 1, len(unique_categories)))
+        for idx, cat in enumerate(unique_categories):
+            r, g, b = colors[idx][:3]
+            category_colors[cat] = f'rgb({int(r*255)}, {int(g*255)}, {int(b*255)})'
+    
+    # 准备数据
+    x_coords = coords[:, 0]
+    y_coords = coords[:, 1]
+    z_coords = coords[:, 2]
+    
+    # 创建3D散点图
+    fig = go.Figure()
+    
+    # 按分类绘制
+    for category in unique_categories:
+        indices = [i for i, item in enumerate(data_list) if item['category'] == category]
+        if indices:
+            fig.add_trace(go.Scatter3d(
+                x=x_coords[indices],
+                y=y_coords[indices],
+                z=z_coords[indices],
+                mode='markers+text',
+                marker=dict(
+                    size=8,
+                    color=category_colors[category],
+                    opacity=0.7,
+                    line=dict(width=1, color='black')
+                ),
+                text=[words[i] for i in indices],
+                textposition='middle center',
+                name=category,
+                hovertemplate='<b>%{text}</b><br>' +
+                            '分类: ' + category + '<br>' +
+                            '语言: ' + [languages[i] for i in indices][0] + '<br>' +
+                            'X: %{x:.2f}<br>Y: %{y:.2f}<br>Z: %{z:.2f}<extra></extra>'
+            ))
+    
+    # 连接同一行的词
+    row_groups = {}
+    for i, item in enumerate(data_list):
+        row_idx = item.get('row_index', i)
+        if row_idx not in row_groups:
+            row_groups[row_idx] = []
+        row_groups[row_idx].append(i)
+    
+    # 绘制连接线
+    for row_idx, indices in row_groups.items():
+        if len(indices) > 1:
+            for i in range(len(indices) - 1):
+                for j in range(i + 1, len(indices)):
+                    fig.add_trace(go.Scatter3d(
+                        x=[x_coords[indices[i]], x_coords[indices[j]]],
+                        y=[y_coords[indices[i]], y_coords[indices[j]]],
+                        z=[z_coords[indices[i]], z_coords[indices[j]]],
+                        mode='lines',
+                        line=dict(color='gray', width=2, dash='dash'),
+                        showlegend=False,
+                        hoverinfo='skip'
+                    ))
+    
+    # 更新布局
+    fig.update_layout(
+        title=dict(
+            text='语义空间3D可视化（MDS降维）',
+            font=dict(size=20),
+            x=0.5
+        ),
+        scene=dict(
+            xaxis_title='维度1',
+            yaxis_title='维度2',
+            zaxis_title='维度3',
+            bgcolor='white',
+            camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.5)
+            )
+        ),
+        width=1000,
+        height=800,
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
+    
+    # 保存为HTML文件
+    fig.write_html(output_path)
+    print(f"3D MDS图已保存: {output_path}")
+    return output_path
+
+def generate_similarity_excel(data_list, similarity_matrix, words, output_path):
+    """生成包含所有词汇对相似度的Excel文件"""
+    import pandas as pd
+    
+    # 创建所有词汇对的列表
+    pairs = []
+    languages = [item.get('language', '') for item in data_list]
+    
+    for i in range(len(words)):
+        for j in range(i + 1, len(words)):
+            word1 = words[i]
+            word2 = words[j]
+            lang1 = languages[i]
+            lang2 = languages[j]
+            similarity = float(similarity_matrix[i][j])
+            
+            # 判断配对类型
+            if lang1 == 'Chinese' and lang2 == 'Chinese':
+                pair_type = '中文-中文'
+            elif lang1 == 'Chinese' and lang2 == 'English':
+                pair_type = '中文-英文'
+            elif lang1 == 'English' and lang2 == 'Chinese':
+                pair_type = '英文-中文'
+            elif lang1 == 'English' and lang2 == 'English':
+                pair_type = '英文-英文'
+            else:
+                pair_type = f'{lang1}-{lang2}'
+            
+            pairs.append({
+                '词汇1': word1,
+                '语言1': lang1,
+                '分类1': data_list[i]['category'],
+                '词汇2': word2,
+                '语言2': lang2,
+                '分类2': data_list[j]['category'],
+                '配对类型': pair_type,
+                '相似度': similarity
+            })
+    
+    # 创建DataFrame并按相似度排序
+    df = pd.DataFrame(pairs)
+    df = df.sort_values('相似度', ascending=False)
+    df = df.reset_index(drop=True)
+    df.index = df.index + 1  # 从1开始编号
+    
+    # 保存为Excel
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        # 所有配对
+        df.to_excel(writer, sheet_name='所有配对', index=True, index_label='排名')
+        
+        # 按配对类型分组
+        for pair_type in df['配对类型'].unique():
+            df_type = df[df['配对类型'] == pair_type].copy()
+            df_type = df_type.reset_index(drop=True)
+            df_type.index = df_type.index + 1
+            sheet_name = pair_type[:31]  # Excel工作表名称限制31个字符
+            df_type.to_excel(writer, sheet_name=sheet_name, index=True, index_label='排名')
+    
+    print(f"相似度Excel文件已保存: {output_path}")
+    return output_path
+
 @app.route('/')
 def index():
     """主页"""
@@ -641,6 +817,11 @@ def upload_file():
             generate_mds_plot(data_list, embeddings_dict, mds_path)
             results['mds'] = f'/results/mds_{result_timestamp}.png'
             
+            # 4. MDS 3D可视化（交互式）
+            mds_3d_path = os.path.join(app.config['RESULTS_FOLDER'], f'mds_3d_{result_timestamp}.html')
+            generate_mds_3d_plot(data_list, embeddings_dict, mds_3d_path)
+            results['mds_3d'] = f'/results/mds_3d_{result_timestamp}.html'
+            
             # 4. 生成相似度数据（所有词汇对）
             words = [item['word'] for item in data_list]
             embeddings = [embeddings_dict[word] for word in words]
@@ -670,6 +851,11 @@ def upload_file():
             
             results['similarity_data'] = similarity_data
             results['word_count'] = len(data_list)
+            
+            # 5. 生成Excel相似度数据文件
+            excel_path = os.path.join(app.config['RESULTS_FOLDER'], f'similarity_data_{result_timestamp}.xlsx')
+            generate_similarity_excel(data_list, similarity_matrix, words, excel_path)
+            results['excel_download'] = f'/results/similarity_data_{result_timestamp}.xlsx'
             
             # 保存数据用于动态网络图生成
             try:
