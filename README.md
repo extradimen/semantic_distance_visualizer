@@ -48,24 +48,42 @@ pip install -r requirements.txt
 
 #### 方式一：后台服务运行（推荐）
 
-使用 systemd 服务，关闭终端后仍可运行：
+使用 systemd 服务，关闭终端后仍可运行，支持自定义端口：
 
 ```bash
-# 启动服务
+# 启动服务（使用默认端口 5000）
 ./start_service.sh
 
-# 查看服务状态
+# 启动服务（使用自定义端口，例如 21304）
+./start_service.sh 21304
+
+# 查看服务状态（默认端口）
 sudo systemctl status semantic-visualizer
+
+# 查看服务状态（自定义端口）
+sudo systemctl status semantic-visualizer-21304
 
 # 查看日志
 sudo journalctl -u semantic-visualizer -f
+# 或自定义端口
+sudo journalctl -u semantic-visualizer-21304 -f
 
-# 停止服务
+# 停止服务（默认端口）
 ./stop_service.sh
+
+# 停止服务（自定义端口）
+./stop_service.sh 21304
 
 # 重启服务
 sudo systemctl restart semantic-visualizer
+# 或自定义端口
+sudo systemctl restart semantic-visualizer-21304
 ```
+
+**注意**：
+- 服务会在后台运行，即使关闭终端也不会中断
+- 服务会在系统重启后自动启动（已启用开机自启）
+- 不同端口会创建不同的服务实例，可以同时运行多个实例
 
 #### 方式二：前台运行（测试用）
 
@@ -146,9 +164,8 @@ semantic_distance_visualizer/
 ├── app.py                 # Flask主应用
 ├── requirements.txt       # Python依赖
 ├── README.md             # 项目说明
-├── start_service.sh      # 启动服务脚本
+├── start_service.sh      # 启动服务脚本（动态生成systemd服务配置）
 ├── stop_service.sh       # 停止服务脚本
-├── semantic-visualizer.service  # systemd服务配置
 ├── templates/
 │   └── index.html        # 前端页面
 ├── static/
