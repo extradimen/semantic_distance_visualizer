@@ -630,7 +630,7 @@ def calculate_semantic_distances(data_list, st_model=None):
     return embeddings_dict, emb_array
 
 
-def generate_heatmap(data_list, emb_array, output_path, heatmap_decimal_places=4):
+def generate_heatmap(data_list, emb_array, output_path, heatmap_decimal_places=2):
     """生成语义相似度热力图 - 只计算同分类同语言的词汇间相似度，多行显示
 
     heatmap_decimal_places: 格内相似度显示小数位数（2–6），由前端传入。
@@ -729,38 +729,124 @@ def generate_heatmap(data_list, emb_array, output_path, heatmap_decimal_places=4
         plt.close()
     return output_path
 
-def generate_network_graph_weighted(data_list, embeddings_dict, output_path, threshold=0.3, centrality_type='degree', power=5):
-    """生成语义网络图 - 按分类着色，节点大小基于加权中心性
-    centrality_type: 'degree' 或 'eigenvector'
-    power: 节点大小映射的幂次（1=线性，2=平方，3=立方等）
+
+def _network_merge_edges_from_similarity(data_list, similarity_matrix, threshold):
+    """按行对齐的相似度矩阵建无向边，同词字符串合并为一条边取最大权重。"""
+    n = len(data_list)
+    words = [item['word'] for item in data_list]
+    edge_w = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            if words[i] == words[j]:
+                continue
+            s = float(similarity_matrix[i, j])
+            if s <= threshold:
+                continue
+            a, b = sorted([words[i], words[j]])
+            edge_w[(a, b)] = max(edge_w.get((a, b), 0.0), s)
+    return edge_w
+
+
+def _network_mutual_topk_edges(edge_w, top_k_per_node):
+    """每节点只保留权重最高的 k 条关联边，且仅当两端互为对方 top-k 时保留边（对称稀疏化）。"""
+    if top_k_per_node <= 0 or not edge_w:
+        return edge_w
+    neigh = defaultdict(list)
+    for (a, b), sim in edge_w.items():
+        neigh[a].append((b, sim))
+        neigh[b].append((a, sim))
+    top_set = {}
+    for u in neigh:
+        neigh[u].sort(key=lambda x: -x[1])
+        top_set[u] = {t[0] for t in neigh[u][:top_k_per_node]}
+    new_w = {}
+    for (a, b), sim in edge_w.items():
+        if b in top_set.get(a, set()) and a in top_set.get(b, set()):
+            new_w[(a, b)] = sim
+    return new_w
+
+
+def _network_cap_edge_count(edge_w, max_edges):
+    if max_edges <= 0 or len(edge_w) <= max_edges:
+        return edge_w
+    items = sorted(edge_w.items(), key=lambda x: -x[1])
+    return dict(items[:max_edges])
+
+
+def _bezier_quad_samples(p0, p1, bend=0.12, n=28):
+    """二次贝塞尔曲线采样点，用于绘制弯边。"""
+    p0 = np.asarray(p0, dtype=float)
+    p1 = np.asarray(p1, dtype=float)
+    mid = 0.5 * (p0 + p1)
+    d = p1 - p0
+    ln = np.linalg.norm(d)
+    if ln < 1e-9:
+        return np.vstack([p0, p1])
+    perp = np.array([-d[1], d[0]], dtype=float)
+    perp /= np.linalg.norm(perp)
+    ctrl = mid + perp * (bend * ln)
+    t = np.linspace(0.0, 1.0, n)
+    om = 1.0 - t
+    curve = (om ** 2)[:, np.newaxis] * p0 + (2 * om * t)[:, np.newaxis] * ctrl + (t ** 2)[:, np.newaxis] * p1
+    return curve
+
+
+def _spread_positions_from_centroid(pos, factor=1.5):
+    """在力导向结果上把各点相对质心径向拉开，减轻「全挤在中间、四周空白」。"""
+    if not pos or factor <= 1.0:
+        return pos
+    pts = np.array(list(pos.values()), dtype=float)
+    c = pts.mean(axis=0)
+    out = {}
+    for n, p in pos.items():
+        v = np.asarray(p, dtype=float) - c
+        out[n] = tuple(c + factor * v)
+    return out
+
+
+def generate_network_graph_weighted(
+    data_list,
+    emb_matrix,
+    output_path,
+    threshold=0.3,
+    centrality_type='degree',
+    power=5,
+    top_k_per_node=12,
+    max_edges_total=1200,
+    curved_edges=True,
+    color_by_community=True,
+    margin_frac=0.16,
+    label_top_n=0,
+):
+    """生成语义网络图：稀疏边（互斥 top-k + 全局上限）、可选模块度社区着色、弯边与留白。
+
+    emb_matrix 与 data_list 逐行对齐（避免同词字典覆盖）。label_top_n>0 时仅给中心性最高的前 N 个节点画文字。
     """
     G = nx.Graph()
-    
-    # 获取所有词汇
+
     words = [item['word'] for item in data_list]
     categories = [item['category'] for item in data_list]
     languages = [item.get('language', '') for item in data_list]
-    
-    # 创建词汇到分类和语言的映射
-    word_to_category = {item['word']: item['category'] for item in data_list}
-    word_to_language = {item['word']: item.get('language', '') for item in data_list}
-    
-    # 获取所有唯一分类
+
+    word_to_category = {}
+    word_to_language = {}
+    for item in data_list:
+        w = item['word']
+        word_to_category[w] = item['category']
+        word_to_language[w] = item.get('language', '')
+
     unique_categories = list(set(categories))
-    
-    # 添加节点
+
     for word in words:
         G.add_node(word)
-    
-    # 添加边（只连接相似度高于阈值的词汇对，权重=相似度）
-    embeddings = [embeddings_dict[word] for word in words]
-    similarity_matrix = cosine_similarity(embeddings)
-    
-    for i in range(len(words)):
-        for j in range(i + 1, len(words)):
-            similarity = similarity_matrix[i][j]
-            if similarity > threshold:
-                G.add_edge(words[i], words[j], weight=similarity)
+
+    similarity_matrix = cosine_similarity(np.asarray(emb_matrix))
+    edge_w = _network_merge_edges_from_similarity(data_list, similarity_matrix, threshold)
+    edge_w = _network_mutual_topk_edges(edge_w, top_k_per_node)
+    edge_w = _network_cap_edge_count(edge_w, max_edges_total)
+
+    for (a, b), sim in edge_w.items():
+        G.add_edge(a, b, weight=sim)
     
     # 计算加权中心性
     if centrality_type == 'degree':
@@ -774,7 +860,9 @@ def generate_network_graph_weighted(data_list, embeddings_dict, output_path, thr
         # 加权特征向量中心性
         try:
             centrality = nx.eigenvector_centrality(G, weight='weight', max_iter=1000)
-        except:
+            for node in G.nodes():
+                centrality.setdefault(node, 0.0)
+        except Exception:
             # 如果迭代失败，使用度中心性作为备选
             centrality = {}
             for node in G.nodes():
@@ -806,143 +894,205 @@ def generate_network_graph_weighted(data_list, embeddings_dict, output_path, thr
         centrality_range = 1
         print("警告: 中心性字典为空")
     
-    # 绘制网络图
-    fig = plt.figure(figsize=(20, 16), facecolor='white')
+    # 绘制网络图（略增大画布留白）
+    fig = plt.figure(figsize=(22, 17), facecolor='white')
     ax = fig.add_subplot(111, facecolor='white')
-    
-    # 使用力导向布局算法
-    pos = nx.spring_layout(G, k=2.5, iterations=150, seed=42)
-    
-    # 绘制边 - 粗细表示权重
-    edges = G.edges()
-    weights = [G[u][v]['weight'] for u, v in edges]
-    
-    from matplotlib.collections import LineCollection
-    
-    edge_positions = []
-    edge_widths = []
-    
-    for (u, v), weight in zip(edges, weights):
-        x1, y1 = pos[u]
-        x2, y2 = pos[v]
-        edge_positions.append([(x1, y1), (x2, y2)])
-        # 边的宽度基于权重（相似度）
-        edge_widths.append(weight * 3 + 0.5)  # 宽度范围：0.5-3.5
-    
-    if edge_positions:
-        edge_colors = [(0.4, 0.4, 0.4, 0.6) for _ in edge_positions]
-        lc = LineCollection(edge_positions, colors=edge_colors, linewidths=edge_widths, 
-                           capstyle='round', alpha=0.6)
-        ax.add_collection(lc)
-    
-    # 绘制节点 - 按分类着色，大小基于加权中心性
+
+    nn = G.number_of_nodes()
+    if nn > 0:
+        # k 越大节点间距越大；略大于默认 1/sqrt(n)，再对坐标做径向拉伸，避免团成一小团
+        if nn > 1:
+            kk = max(6.0 / np.sqrt(nn), 3.4)
+        else:
+            kk = None
+        pos = nx.spring_layout(G, k=kk, iterations=360, seed=42, weight='weight')
+        pos = _spread_positions_from_centroid(pos, factor=1.52)
+    else:
+        pos = {}
+
+    # 边：弯线 + 低对比度，线宽随权重略变
+    if G.number_of_edges() > 0:
+        wmin = min(d['weight'] for _, _, d in G.edges(data=True))
+        wmax = max(d['weight'] for _, _, d in G.edges(data=True))
+        wr = (wmax - wmin) if wmax > wmin else 1.0
+        for u, v, dat in G.edges(data=True):
+            w = float(dat['weight'])
+            lw = 0.35 + (w - wmin) / wr * 1.35
+            alpha_e = 0.12 + (w - wmin) / wr * 0.18
+            p0, p1 = pos[u], pos[v]
+            if curved_edges:
+                curve = _bezier_quad_samples(p0, p1, bend=0.14, n=32)
+                ax.plot(
+                    curve[:, 0],
+                    curve[:, 1],
+                    color=(0.42, 0.45, 0.5),
+                    alpha=float(np.clip(alpha_e, 0.08, 0.35)),
+                    linewidth=lw,
+                    solid_capstyle='round',
+                    zorder=1,
+                )
+            else:
+                ax.plot(
+                    [p0[0], p1[0]],
+                    [p0[1], p1[1]],
+                    color=(0.42, 0.45, 0.5),
+                    alpha=float(np.clip(alpha_e, 0.08, 0.35)),
+                    linewidth=lw,
+                    solid_capstyle='round',
+                    zorder=1,
+                )
+
     node_sizes_ordered = []
     node_colors_ordered = []
-    
-    # 为每个分类分配颜色
+
     import matplotlib.cm as cm
+
     category_colors = {}
     if len(unique_categories) == 1:
         category_colors[unique_categories[0]] = (0.2, 0.4, 0.8)
     else:
-        colors = cm.Set3(np.linspace(0, 1, len(unique_categories)))
+        pal = cm.Set3(np.linspace(0, 1, len(unique_categories)))
         for idx, cat in enumerate(unique_categories):
-            category_colors[cat] = colors[idx][:3]
-    
-    # 使用加权中心性设置节点大小，按分类设置颜色
-    # 确保节点顺序与绘制顺序一致
+            category_colors[cat] = pal[idx][:3]
+
     nodes = list(G.nodes())
-    
-    # 调试信息：打印中心性值范围
+
+    node_comm_index = {}
+    if color_by_community and G.number_of_edges() > 0:
+        try:
+            from networkx.algorithms.community import greedy_modularity_communities
+
+            comms = list(greedy_modularity_communities(G, weight='weight'))
+            for ci, comm in enumerate(comms):
+                for n in comm:
+                    node_comm_index[n] = ci
+        except Exception as ex:
+            print(f'社区划分失败，回退按分类着色: {ex}')
+            node_comm_index = {}
+    n_comm = max(len(set(node_comm_index.values())), 1) if node_comm_index else 1
+    comm_cmap = cm.get_cmap('tab20')
+
     if centrality:
         cent_values = list(centrality.values())
         print(f"中心性统计: min={min(cent_values):.4f}, max={max(cent_values):.4f}, range={centrality_range:.4f}")
         print(f"中心性值示例: {dict(list(centrality.items())[:5])}")
-    
+
+    label_nodes = set()
+    if label_top_n and label_top_n > 0 and centrality:
+        sorted_nodes = sorted(centrality.keys(), key=lambda x: centrality.get(x, 0), reverse=True)
+        label_nodes = set(sorted_nodes[: min(label_top_n, len(sorted_nodes))])
+
     for node in nodes:
         cent_value = centrality.get(node, 0)
-        # 节点大小：中心性越大，节点越大（使用幂次映射，放大高值差异）
         if centrality_range > 0:
             normalized_cent = (cent_value - min_centrality) / centrality_range
-            # 使用幂次映射：让高值节点的差异更明显
-            # 例如：power=2时，normalized=0.25 -> 0.0625, normalized=1.0 -> 1.0
-            # power=3时，normalized=0.25 -> 0.015625, normalized=1.0 -> 1.0
-            # 幂次越大，高值节点的差异会被放大得越明显
             powered_normalized = normalized_cent ** power
         else:
-            # 如果所有节点中心性相同，使用固定大小
             powered_normalized = 0.5
-            print(f"警告: 所有节点中心性相同或为0，使用默认大小")
-        
-        node_size = 300 + powered_normalized * 4700  # 最小300，最大5000（使用幂次映射）
+            print('警告: 所有节点中心性相同或为0，使用默认大小')
+
+        node_size = 280 + powered_normalized * 4500
         node_sizes_ordered.append(node_size)
-        
-        # 节点颜色：按分类
-        category = word_to_category.get(node, unique_categories[0])
-        node_colors_ordered.append(category_colors.get(category, (0.2, 0.4, 0.8)))
-    
-    # 绘制节点
-    nx.draw_networkx_nodes(G, pos, 
-                           nodelist=nodes,
-                           node_size=node_sizes_ordered, 
-                           node_color=node_colors_ordered, 
-                           alpha=0.8,
-                           ax=ax,
-                           edgecolors='#2c3e50',
-                           linewidths=1.5)
-    
-    # 绘制标签 - 使用节点原始语言
-    chinese_font = 'sans-serif'
-    try:
-        available_fonts = [f.name for f in fm.fontManager.ttflist]
-        font_priority = [
-            'Noto Sans CJK SC', 'Noto Sans CJK JP', 'Source Han Sans SC',
-            'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'SimHei', 'SimSun', 'Microsoft YaHei'
-        ]
-        for font_name in font_priority:
-            if font_name in available_fonts:
-                chinese_font = font_name
-                break
-    except:
-        chinese_font = 'sans-serif'
-    
-    # 确保节点顺序一致：使用 nodes 列表的顺序，而不是 pos.items() 的顺序
+
+        if color_by_community and node in node_comm_index:
+            ci = node_comm_index[node] % 20
+            rgb = comm_cmap(ci / 19.0)[:3]
+        else:
+            category = word_to_category.get(node, unique_categories[0])
+            rgb = category_colors.get(category, (0.2, 0.4, 0.8))
+        node_colors_ordered.append(rgb)
+
+    # 注意：部分 networkx 版本不接受 zorder，勿传入以免 draw_networkx_nodes 报错
+    nx.draw_networkx_nodes(
+        G,
+        pos,
+        nodelist=nodes,
+        node_size=node_sizes_ordered,
+        node_color=node_colors_ordered,
+        alpha=0.92,
+        ax=ax,
+        edgecolors='#334155',
+        linewidths=1.1,
+    )
+
+    chinese_font = get_matplotlib_cjk_font_family()
+
     for idx, node in enumerate(nodes):
         if node not in pos:
+            continue
+        if label_top_n and label_top_n > 0 and node not in label_nodes:
             continue
         x, y = pos[node]
         node_size = node_sizes_ordered[idx]
         node_color = node_colors_ordered[idx]
         language = word_to_language.get(node, '')
-        
-        # 根据节点大小动态计算字体大小
-        base_font_size = 8 + (node_size / 5000) * 14
-        text_length = len(node)
-        if text_length > 8:
-            font_size = base_font_size * (8 / text_length) * 0.9
+
+        base_font_size = 7.5 + (node_size / 5000) * 12
+        text_length = len(str(node))
+        if text_length > 10:
+            font_size = base_font_size * (10 / text_length) * 0.92
         else:
             font_size = base_font_size
-        
-        font_size = max(8, min(22, font_size))
-        
-        # 根据节点颜色选择文字颜色（确保对比度）
-        if sum(node_color) / 3 > 0.5:  # 浅色背景
-            text_color = '#2c3e50'
-        else:  # 深色背景
-            text_color = '#ffffff'
-        
-        # 使用对应语言的字体
-        if language == 'Chinese' or any('\u4e00' <= char <= '\u9fff' for char in node):
+        font_size = max(7, min(20, font_size))
+
+        if sum(node_color) / 3 > 0.52:
+            text_color = '#1e293b'
+        else:
+            text_color = '#f8fafc'
+
+        if language == 'Chinese' or any('\u4e00' <= char <= '\u9fff' for char in str(node)):
             font_family = chinese_font
         else:
-            font_family = 'Arial'
-        
-        ax.text(x, y, node, fontsize=font_size, ha='center', va='center',
-                color=text_color, fontweight='bold', fontfamily=font_family,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor=node_color, 
-                         alpha=0.7, edgecolor='none'))
-    
-    plt.title(f'语义网络图 - {title_suffix}', fontsize=20, pad=20, fontweight='bold', fontfamily=chinese_font)
+            font_family = 'DejaVu Sans'
+
+        ax.text(
+            x,
+            y,
+            node,
+            fontsize=font_size,
+            ha='center',
+            va='center',
+            color=text_color,
+            fontweight='600',
+            fontfamily=font_family,
+            bbox=dict(
+                boxstyle='round,pad=0.22',
+                facecolor=node_color,
+                alpha=0.88,
+                edgecolor='#94a3b8',
+                linewidth=0.35,
+            ),
+            zorder=4,
+        )
+
+    if pos:
+        xs = [p[0] for p in pos.values()]
+        ys = [p[1] for p in pos.values()]
+        xr = max(xs) - min(xs) if xs else 1.0
+        yr = max(ys) - min(ys) if ys else 1.0
+        span = max(xr, yr, 1e-6)
+        pad = margin_frac * span
+        ax.set_xlim(min(xs) - pad, max(xs) + pad)
+        ax.set_ylim(min(ys) - pad, max(ys) + pad)
+    ax.set_aspect('equal', adjustable='datalim')
+
+    sub = []
+    if top_k_per_node > 0:
+        sub.append(f'每点最多{top_k_per_node}强边(互斥)')
+    if max_edges_total > 0:
+        sub.append(f'全局≤{max_edges_total}边')
+    if color_by_community:
+        sub.append('社区着色')
+    if curved_edges:
+        sub.append('弯边')
+    extra = '；'.join(sub) if sub else '全阈值边'
+    plt.title(
+        f'语义网络图 - {title_suffix}\n（{extra}）',
+        fontsize=18,
+        pad=16,
+        fontweight='bold',
+        fontfamily=chinese_font,
+    )
     plt.axis('off')
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
@@ -1591,9 +1741,9 @@ def upload_file():
             results = {}
             
             try:
-                hdp = int(request.form.get('heatmap_decimal_places', 4))
+                hdp = int(request.form.get('heatmap_decimal_places', 2))
             except (TypeError, ValueError):
-                hdp = 4
+                hdp = 2
             hdp = max(2, min(6, hdp))
             
             # 1. 热力图（按分类和语言分组）
@@ -1605,15 +1755,43 @@ def upload_file():
             # 2. 网络图（两个图：加权度中心性和加权特征向量中心性）
             threshold = float(request.form.get('threshold', 0.3))
             power = float(request.form.get('power', 5))
+            try:
+                ntk = int(request.form.get('network_top_k_per_node', '12'))
+            except (TypeError, ValueError):
+                ntk = 12
+            try:
+                nme = int(request.form.get('network_max_edges', '1200'))
+            except (TypeError, ValueError):
+                nme = 1200
+            ntk = max(0, min(ntk, 500))
+            nme = max(0, min(nme, 500000))
+            curved_e = request.form.get('network_curved_edges', '1') not in ('0', 'false', 'off', 'no')
+            comm_c = request.form.get('network_community_colors', '1') not in ('0', 'false', 'off', 'no')
+            try:
+                ltn = int(request.form.get('network_label_top_n', '0'))
+            except (TypeError, ValueError):
+                ltn = 0
+            ltn = max(0, min(ltn, 2000))
+            net_kw = dict(
+                top_k_per_node=ntk,
+                max_edges_total=nme,
+                curved_edges=curved_e,
+                color_by_community=comm_c,
+                label_top_n=ltn,
+            )
             
             # 加权度中心性网络图
             network_degree_path = os.path.join(app.config['RESULTS_FOLDER'], f'network_degree_{result_timestamp}.png')
-            generate_network_graph_weighted(data_list, embeddings_dict, network_degree_path, threshold, 'degree', power)
+            generate_network_graph_weighted(
+                data_list, emb_matrix, network_degree_path, threshold, 'degree', power, **net_kw
+            )
             results['network_degree'] = f'/results/network_degree_{result_timestamp}.png'
             
             # 加权特征向量中心性网络图
             network_eigen_path = os.path.join(app.config['RESULTS_FOLDER'], f'network_eigen_{result_timestamp}.png')
-            generate_network_graph_weighted(data_list, embeddings_dict, network_eigen_path, threshold, 'eigenvector', power)
+            generate_network_graph_weighted(
+                data_list, emb_matrix, network_eigen_path, threshold, 'eigenvector', power, **net_kw
+            )
             results['network_eigen'] = f'/results/network_eigen_{result_timestamp}.png'
             
             # 3. MDS 2D可视化（按分类着色）；距离矩阵为 1 - cosine similarity；坐标用于论文式(14)跨语言位移

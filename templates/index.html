@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>词汇语义距离可视化工具</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=20260509b">
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 </head>
 <body>
@@ -25,56 +25,129 @@
                             <span class="file-text">选择文件或拖拽到此处</span>
                         </label>
                     </div>
-                    
-                    <div class="form-group">
-                        <label for="threshold">网络图相似度阈值:</label>
-                        <input type="number" id="threshold" name="threshold" value="0.3" min="0" max="1" step="0.05" required>
-                        <small>只显示相似度高于此值的词汇连接（分析前指定，上传后不可修改）</small>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="power">节点大小映射幂次:</label>
-                        <input type="number" id="power" name="power" value="5" min="1" max="10" step="0.5" required>
-                        <small>控制节点大小的非线性映射（1=线性，2=平方，3=立方，数值越大高值节点差异越明显）</small>
-                    </div>
 
-                    <div class="form-group">
-                        <label for="heatmap_decimal_places">热力图格内小数位数:</label>
-                        <select id="heatmap_decimal_places" name="heatmap_decimal_places">
-                            <option value="2">2 位</option>
-                            <option value="3">3 位</option>
-                            <option value="4" selected>4 位（推荐）</option>
-                            <option value="5">5 位</option>
-                            <option value="6">6 位</option>
-                        </select>
-                        <small>相似度接近 1 时，位数越多越容易区分；位数多且词多时格子会较挤。</small>
-                    </div>
+                    <div class="form-settings-stack" role="region" aria-label="分析参数">
 
-                    <div class="form-group optional-analysis">
-                        <label><input type="checkbox" id="run_loo" name="run_loo" value="1"> 运行 Leave-one-submodule-out 敏感性检验（需词汇含 submodule 列；较慢）</label>
-                    </div>
-                    <div class="form-group optional-analysis">
-                        <label><input type="checkbox" id="run_rs" name="run_rs" value="1"> 运行 Random subsampling 稳健性检验（100 轮随机抽样，较慢）</label>
-                        <div style="margin-top:8px;">
-                            <label for="remove_ratio">每类删除比例:</label>
-                            <input type="number" id="remove_ratio" name="remove_ratio" value="0.2" min="0.05" max="0.5" step="0.05" style="width:5rem;">
-                            <label for="n_iter" style="margin-left:12px;">迭代次数:</label>
-                            <input type="number" id="n_iter" name="n_iter" value="100" min="10" max="500" step="10" style="width:5rem;">
-                        </div>
-                    </div>
-                    <div class="form-group optional-analysis">
-                        <div class="cross-model-header">多模型交叉验证（勾选与当前 baseline 对比的模型，会额外加载权重，较耗时）</div>
-                        <p class="cross-model-note">Baseline 固定为 <code>paraphrase-multilingual-MiniLM-L12-v2</code>（与主分析相同），请勿再选等效模型。</p>
-                        <p class="cross-model-note">若服务器<strong>无法访问 Hugging Face</strong>且本地未缓存对应模型，勾选额外模型会导致长时间等待或失败；无网环境请<strong>不要勾选</strong>多模型，仅用主分析即可。</p>
-                        <div class="model-check-grid" role="group" aria-label="附加嵌入模型">
-                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/LaBSE"> LaBSE</label>
-                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/distiluse-base-multilingual-cased-v2"> distiluse-base-multilingual-cased-v2</label>
-                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="intfloat/multilingual-e5-base"> multilingual-e5-base</label>
-                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="intfloat/multilingual-e5-large"> multilingual-e5-large</label>
-                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/paraphrase-multilingual-mpnet-base-v2"> paraphrase-multilingual-mpnet-base-v2</label>
-                        </div>
-                        <label for="cross_models_custom" class="cross-model-custom-label">其他模型 ID（可选，多个用英文逗号分隔）</label>
-                        <input type="text" id="cross_models_custom" class="cross-model-custom-input" autocomplete="off" placeholder="例如：Alibaba-NLP/gte-multilingual-base">
+                        <section class="settings-card">
+                            <h3 class="settings-card__title">热力图</h3>
+                            <p class="settings-card__lead">按「分类 + 语言」分组绘制相似度矩阵；仅影响热力图 PNG，不影响网络图。</p>
+                            <div class="settings-field">
+                                <label for="heatmap_decimal_places">格内相似度小数位数</label>
+                                <select id="heatmap_decimal_places" name="heatmap_decimal_places" class="input-control input-control--md">
+                                    <option value="2" selected>2 位（推荐）</option>
+                                    <option value="3">3 位</option>
+                                    <option value="4">4 位</option>
+                                    <option value="5">5 位</option>
+                                    <option value="6">6 位</option>
+                                </select>
+                                <p class="field-hint">默认 2 位格子更清爽。嵌入相似度常在 0.97～0.999 区间，2 位可能大量显示为 1.00；若需区分细微差别请选 4～6 位（词多时格内可能重叠）。</p>
+                            </div>
+                        </section>
+
+                        <section class="settings-card">
+                            <h3 class="settings-card__title">语义网络图（静态 PNG）</h3>
+                            <p class="settings-card__lead">根据词汇相似度连边并生成两张图（加权度中心性 / 加权特征向量中心性）。以下参数在点击「开始分析」前设定；本次任务提交后，结果不会随表单改动。</p>
+
+                            <div class="settings-grid-2">
+                                <div class="settings-field">
+                                    <label for="threshold">相似度阈值（连边下限）</label>
+                                    <input type="number" id="threshold" name="threshold" class="input-control input-control--md" value="0.3" min="0" max="1" step="0.05" required>
+                                    <p class="field-hint">仅当两词余弦相似度<strong>大于</strong>该值时才画边。值越低边越多、图越密；词多时可试 0.5～0.7。</p>
+                                </div>
+                                <div class="settings-field">
+                                    <label for="power">节点大小映射幂次</label>
+                                    <input type="number" id="power" name="power" class="input-control input-control--md" value="5" min="1" max="10" step="0.5" required>
+                                    <p class="field-hint">在中心性归一化后做幂次变换，再映射为圆的大小。越大则「高中心性节点」相对更大，低值节点更小。</p>
+                                </div>
+                            </div>
+
+                            <div class="settings-subhead">连线稀疏化（在阈值之上再减边）</div>
+                            <aside class="help-callout" role="note">
+                                <strong>为何需要：</strong>阈值通过后仍可能边数过多（接近「毛球」）。<strong>互斥 top-k</strong>：每个词只保留与其最相似的若干条候选边，且仅当两端<strong>互为</strong>对方 top-k 时才保留该边。<strong>全局上限</strong>：再按边权重从高到低截断。填 <code>0</code> 表示不限制该项。
+                            </aside>
+                            <div class="settings-grid-2">
+                                <div class="settings-field">
+                                    <label for="network_top_k_per_node">每节点最多强边数（互斥 top-k）</label>
+                                    <input type="number" id="network_top_k_per_node" name="network_top_k_per_node" class="input-control input-control--md" value="12" min="0" max="500" step="1">
+                                    <p class="field-hint">默认 12；<code>0</code> = 不做 top-k 限制。</p>
+                                </div>
+                                <div class="settings-field">
+                                    <label for="network_max_edges">全局最多边数</label>
+                                    <input type="number" id="network_max_edges" name="network_max_edges" class="input-control input-control--md" value="1200" min="0" max="500000" step="50">
+                                    <p class="field-hint">默认 1200；<code>0</code> = 不限制总边数。</p>
+                                </div>
+                            </div>
+
+                            <div class="settings-subhead">绘制样式</div>
+                            <ul class="checkbox-list" role="list">
+                                <li class="checkbox-list__item">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="network_curved_edges" name="network_curved_edges" value="1" checked>
+                                        <span class="checkbox-label__text">弯边绘制</span>
+                                    </label>
+                                    <p class="field-hint field-hint--tight">边用轻微曲线代替直线，减轻交叉处的视觉噪声。</p>
+                                </li>
+                                <li class="checkbox-list__item">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="network_community_colors" name="network_community_colors" value="1" checked>
+                                        <span class="checkbox-label__text">按模块度社区着色</span>
+                                    </label>
+                                    <p class="field-hint field-hint--tight">开启：颜色表示在当前<strong>边集</strong>上算法划分的紧密子群，<strong>不是</strong>表格 Class 的官方含义。关闭：按 Class 列分类着色。</p>
+                                </li>
+                            </ul>
+
+                            <div class="settings-field settings-field--full">
+                                <label for="network_label_top_n">仅标注中心性前 N 个节点</label>
+                                <input type="number" id="network_label_top_n" name="network_label_top_n" class="input-control input-control--md" value="0" min="0" max="2000" step="1">
+                                <p class="field-hint"><code>0</code> = 全部节点显示文字标签；设为 20～50 等可减少中心区域标签重叠。</p>
+                            </div>
+                        </section>
+
+                        <section class="settings-card settings-card--optional">
+                            <h3 class="settings-card__title">可选分析（耗时）</h3>
+                            <p class="settings-card__lead">默认不勾选；需要表格中含 <code>submodule</code> 等列时再开启。勾选会显著延长运行时间。</p>
+
+                            <div class="settings-field">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="run_loo" name="run_loo" value="1">
+                                    <span class="checkbox-label__text">Leave-one-submodule-out 敏感性检验</span>
+                                </label>
+                                <p class="field-hint field-hint--tight">逐次留出某一子模块，观察指标变化；需词汇表含 <code>submodule</code> 列。</p>
+                            </div>
+
+                            <div class="settings-field">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="run_rs" name="run_rs" value="1">
+                                    <span class="checkbox-label__text">Random subsampling 稳健性检验</span>
+                                </label>
+                                <p class="field-hint field-hint--tight">多轮随机删词后重算指标；参数见下方。</p>
+                                <div class="settings-inline-row">
+                                    <div class="settings-field settings-field--inline">
+                                        <label for="remove_ratio">每类删除比例</label>
+                                        <input type="number" id="remove_ratio" name="remove_ratio" class="input-control input-control--sm" value="0.2" min="0.05" max="0.5" step="0.05">
+                                    </div>
+                                    <div class="settings-field settings-field--inline">
+                                        <label for="n_iter">迭代次数</label>
+                                        <input type="number" id="n_iter" name="n_iter" class="input-control input-control--sm" value="100" min="10" max="500" step="10">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="settings-field">
+                                <div class="cross-model-header">多模型交叉验证</div>
+                                <p class="cross-model-note">与当前主模型（<code>paraphrase-multilingual-MiniLM-L12-v2</code>）对比相似度结构；勿再选与 baseline 等效的模型。</p>
+                                <p class="cross-model-note">若服务器<strong>无法访问 Hugging Face</strong>且本地无缓存，勾选额外模型可能长时间等待或失败；无网环境建议不要勾选。</p>
+                                <div class="model-check-grid" role="group" aria-label="附加嵌入模型">
+                                    <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/LaBSE"> LaBSE</label>
+                                    <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/distiluse-base-multilingual-cased-v2"> distiluse-base-multilingual-cased-v2</label>
+                                    <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="intfloat/multilingual-e5-base"> multilingual-e5-base</label>
+                                    <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="intfloat/multilingual-e5-large"> multilingual-e5-large</label>
+                                    <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/paraphrase-multilingual-mpnet-base-v2"> paraphrase-multilingual-mpnet-base-v2</label>
+                                </div>
+                                <label for="cross_models_custom" class="cross-model-custom-label">其他模型 ID（可选，英文逗号分隔）</label>
+                                <input type="text" id="cross_models_custom" class="cross-model-custom-input" autocomplete="off" placeholder="例如：Alibaba-NLP/gte-multilingual-base">
+                            </div>
+                        </section>
                     </div>
                     
                     <button type="button" class="btn-primary" id="submitBtn">

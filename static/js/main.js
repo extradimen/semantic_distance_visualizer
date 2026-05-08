@@ -98,9 +98,28 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         const hdpEl = document.getElementById('heatmap_decimal_places');
-        let heatmapDecimals = hdpEl ? parseInt(hdpEl.value, 10) : 4;
+        let heatmapDecimals = hdpEl ? parseInt(hdpEl.value, 10) : 2;
         if (isNaN(heatmapDecimals) || heatmapDecimals < 2 || heatmapDecimals > 6) {
             showError('热力图小数位数请选择 2～6');
+            return;
+        }
+
+        const ntkEl = document.getElementById('network_top_k_per_node');
+        const nmeEl = document.getElementById('network_max_edges');
+        const ltnEl = document.getElementById('network_label_top_n');
+        let ntk = ntkEl ? parseInt(ntkEl.value, 10) : 12;
+        let nme = nmeEl ? parseInt(nmeEl.value, 10) : 1200;
+        let ltn = ltnEl ? parseInt(ltnEl.value, 10) : 0;
+        if (isNaN(ntk) || ntk < 0 || ntk > 500) {
+            showError('每节点强边数请填 0～500（0 表示不限制互斥 top-k）');
+            return;
+        }
+        if (isNaN(nme) || nme < 0 || nme > 500000) {
+            showError('全局最多边数请填 0～500000（0 表示不限制）');
+            return;
+        }
+        if (isNaN(ltn) || ltn < 0 || ltn > 2000) {
+            showError('标注节点数请填 0～2000（0 表示全部标注）');
             return;
         }
         
@@ -108,6 +127,13 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('threshold', threshold);
         formData.append('power', power);
         formData.set('heatmap_decimal_places', String(heatmapDecimals));
+        formData.set('network_top_k_per_node', String(ntk));
+        formData.set('network_max_edges', String(nme));
+        formData.set('network_label_top_n', String(ltn));
+        const curvedCb = document.getElementById('network_curved_edges');
+        const commCb = document.getElementById('network_community_colors');
+        formData.set('network_curved_edges', curvedCb && curvedCb.checked ? '1' : '0');
+        formData.set('network_community_colors', commCb && commCb.checked ? '1' : '0');
         if (document.getElementById('run_loo') && document.getElementById('run_loo').checked) {
             formData.set('run_loo', '1');
         }
