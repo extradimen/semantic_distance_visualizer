@@ -96,10 +96,18 @@ document.addEventListener('DOMContentLoaded', function() {
             showError('幂次必须是1到10之间的数字');
             return;
         }
+
+        const hdpEl = document.getElementById('heatmap_decimal_places');
+        let heatmapDecimals = hdpEl ? parseInt(hdpEl.value, 10) : 4;
+        if (isNaN(heatmapDecimals) || heatmapDecimals < 2 || heatmapDecimals > 6) {
+            showError('热力图小数位数请选择 2～6');
+            return;
+        }
         
         const formData = new FormData(form);
         formData.append('threshold', threshold);
         formData.append('power', power);
+        formData.set('heatmap_decimal_places', String(heatmapDecimals));
         if (document.getElementById('run_loo') && document.getElementById('run_loo').checked) {
             formData.set('run_loo', '1');
         }

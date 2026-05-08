@@ -35,6 +35,36 @@ plt.rcParams['font.sans-serif'] = [
 ]
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
+
+def get_matplotlib_cjk_font_family():
+    """选择能渲染中文等 CJK 的字体名，供热力图/坐标轴等与 seaborn 联用。
+
+    仅从已知 CJK 字体候选里解析，不把 rcParams 里的 DejaVu 等当作中文回退，
+    否则会出现「方框 / missing glyph」。
+    """
+    try:
+        available = {f.name for f in fm.fontManager.ttflist}
+        for name in (
+            'Noto Sans CJK SC',
+            'Noto Sans CJK JP',
+            'Noto Sans CJK HK',
+            'Noto Sans CJK KR',
+            'Source Han Sans SC',
+            'Source Han Sans CN',
+            'WenQuanYi Micro Hei',
+            'WenQuanYi Zen Hei',
+            'Droid Sans Fallback',
+            'SimHei',
+            'SimSun',
+            'Microsoft YaHei',
+        ):
+            if name in available:
+                return name
+    except Exception:
+        pass
+    return 'sans-serif'
+
+
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['RESULTS_FOLDER'] = 'results'
@@ -52,6 +82,60 @@ os.makedirs(cache_dir, exist_ok=True)
 # ModelScope 模型配置
 modelscope_model_id = 'extradimen/paraphrase-multilingual-MiniLM-L12-v2'
 modelscope_cache_dir = os.path.join(cache_dir, 'modelscope', 'hub')
+# 与权重匹配的官方分词器（HF Hub）；用于修复部分 ModelScope 快照中 tokenizer 与权重不匹配的问题
+HF_PARAPHRASE_MINILM_ID = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+
+
+def _latin_text_tokenizer_collapsed(st_model):
+    """若不同英文词得到完全相同的 token id 序列，则英文会全部走 <unk>，向量塌缩为同一向量。"""
+    tok = getattr(st_model, 'tokenizer', None)
+    if tok is None:
+        return False
+    try:
+        a = tok.encode('Trade', add_special_tokens=True)
+        b = tok.encode('Advantage', add_special_tokens=True)
+        return a == b
+    except Exception:
+        return False
+
+
+def repair_paraphrase_multilingual_minilm_tokenizer(st_model, weights_dir=None):
+    """ModelScope 部分快照中 tokenizer 与权重不匹配：英文全部变为 <unk>，向量塌缩，相似度恒≈1。
+
+    做法：从 Hugging Face 拉取（或使用本地 HF 缓存）官方 tokenizer 文件，写入权重目录并
+    **重新加载** SentenceTransformer（ST 5.x 不允许直接替换 tokenizer 属性）。
+    weights_dir：SentenceTransformer 加载的本地目录；若为 None 则无法覆盖文件，仅告警。
+    """
+    if not _latin_text_tokenizer_collapsed(st_model):
+        return st_model
+    from transformers import AutoTokenizer
+
+    print(
+        '⚠️ 检测到本地 tokenizer 将英文误分为 <unk>（Trade 与 Advantage 的 token 序列相同），'
+        '相似度会恒为 ~1。正在用 Hugging Face 官方 tokenizer 覆盖配置并重新加载模型…'
+    )
+    try:
+        tok = AutoTokenizer.from_pretrained(HF_PARAPHRASE_MINILM_ID)
+        if weights_dir and os.path.isdir(weights_dir):
+            tj = os.path.join(weights_dir, 'tokenizer.json')
+            if os.path.isfile(tj):
+                bak = os.path.join(weights_dir, 'tokenizer.json.bak_before_hf_tokenizer')
+                if not os.path.isfile(bak):
+                    import shutil
+
+                    shutil.copy2(tj, bak)
+            tok.save_pretrained(weights_dir)
+            st2 = SentenceTransformer(weights_dir)
+            if _latin_text_tokenizer_collapsed(st2):
+                print('⚠️ 覆盖 tokenizer 后英文仍塌缩，请检查 HF 缓存是否完整。')
+            else:
+                print('✅ tokenizer 已修复并重新加载，英文分词正常。')
+            return st2
+        print('⚠️ 未提供权重目录，无法写入 tokenizer 文件；请改用 Hugging Face 加载或指定本地路径。')
+    except Exception as e:
+        print(f'⚠️ 修复 tokenizer 失败（离线时请预先缓存 sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2）: {e}')
+    return st_model
+
 
 # 加载预训练模型（优先从 ModelScope 加载，适用于中国大陆用户）
 print("正在加载语义嵌入模型...")
@@ -61,9 +145,11 @@ try:
         modelscope_cache_dir,
         modelscope_model_id.replace("/", os.sep),
     )
+    _st_weights_dir = None
     if os.path.isfile(os.path.join(_local_ms, "modules.json")):
         print(f"使用本地已缓存模型: {_local_ms}")
         model = SentenceTransformer(_local_ms)
+        _st_weights_dir = _local_ms
         print("✅ 模型已从本地 ModelScope 缓存加载完成！")
     else:
         # 尝试从 ModelScope 加载
@@ -74,6 +160,7 @@ try:
             print(f"模型已下载到: {model_dir}")
             # 从本地路径加载模型
             model = SentenceTransformer(model_dir)
+            _st_weights_dir = model_dir
             print("✅ 模型已从 ModelScope 加载完成！")
         except ImportError:
             print("⚠️  ModelScope SDK 未安装，尝试从 Hugging Face 加载...")
@@ -95,6 +182,8 @@ try:
             os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
             model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             print("✅ 模型已从 Hugging Face 加载完成！")
+
+    model = repair_paraphrase_multilingual_minilm_tokenizer(model, _st_weights_dir)
 except Exception as e:
     print(f"❌ 模型加载失败: {e}")
     raise
@@ -194,13 +283,15 @@ def get_sentence_transformer(model_name_or_path, cache_root=None):
     if os.path.isdir(model_name_or_path) and os.path.isfile(
         os.path.join(model_name_or_path, 'config_sentence_transformers.json')
     ):
-        return SentenceTransformer(model_name_or_path)
+        st = SentenceTransformer(model_name_or_path)
+        return repair_paraphrase_multilingual_minilm_tokenizer(st, model_name_or_path)
     # ModelScope 风格缓存路径 extradimen/xxx
     ms_local = os.path.join(
         cache_root, 'modelscope', 'hub', model_name_or_path.replace('/', os.sep)
     )
     if os.path.isfile(os.path.join(ms_local, 'modules.json')):
-        return SentenceTransformer(ms_local)
+        st = SentenceTransformer(ms_local)
+        return repair_paraphrase_multilingual_minilm_tokenizer(st, ms_local)
 
     hf_hub_roots = [
         os.path.join(cache_root, 'huggingface', 'hub'),
@@ -209,14 +300,17 @@ def get_sentence_transformer(model_name_or_path, cache_root=None):
     for hr in hf_hub_roots:
         snap = _hf_hub_snapshot_path(model_name_or_path, hr)
         if snap:
-            return SentenceTransformer(snap)
+            st = SentenceTransformer(snap)
+            return repair_paraphrase_multilingual_minilm_tokenizer(st, snap)
 
     if not _huggingface_host_reachable():
         raise RuntimeError(
             '无法连接 huggingface.co，且本地未找到该模型的 Hugging Face 缓存。'
             '请取消「多模型验证」勾选，或先在可联网环境下载模型到 ~/.cache/huggingface/hub。'
         )
-    return SentenceTransformer(model_name_or_path)
+    st = SentenceTransformer(model_name_or_path)
+    wd = model_name_or_path if isinstance(model_name_or_path, str) and os.path.isdir(model_name_or_path) else None
+    return repair_paraphrase_multilingual_minilm_tokenizer(st, wd)
 
 
 def build_threshold_graph(data_list, similarity_matrix, threshold):
@@ -535,8 +629,20 @@ def calculate_semantic_distances(data_list, st_model=None):
         embeddings_dict[item['word']] = emb
     return embeddings_dict, emb_array
 
-def generate_heatmap(data_list, embeddings_dict, output_path):
-    """生成语义相似度热力图 - 只计算同分类同语言的词汇间相似度，多行显示"""
+
+def generate_heatmap(data_list, emb_array, output_path, heatmap_decimal_places=4):
+    """生成语义相似度热力图 - 只计算同分类同语言的词汇间相似度，多行显示
+
+    heatmap_decimal_places: 格内相似度显示小数位数（2–6），由前端传入。
+
+    必须使用与 data_list 顺序一致的 emb_array（逐行 encode），不能再用「词字符串→向量」
+    的字典：同一英文词（如 Trade）在多行重复出现时，字典只保留最后一次，会把不同行的词
+    错误地映射成同一向量，热力图上就出现大片 1.0；中文多为复合词、表中重复字符串较少，
+    往往看不出这一问题。
+    """
+    idx_of = {id(item): i for i, item in enumerate(data_list)}
+    emb_array = np.asarray(emb_array)
+
     # 按分类和语言分组
     groups = {}
     for item in data_list:
@@ -549,63 +655,78 @@ def generate_heatmap(data_list, embeddings_dict, output_path):
     num_groups = len(groups)
     if num_groups == 0:
         raise ValueError("没有有效的数据分组")
-    
-    # 如果只有一个分组，直接生成单个热力图
-    if num_groups == 1:
-        group_key = list(groups.keys())[0]
-        group_items = groups[group_key]
-        words = [item['word'] for item in group_items]
-        
-        # 计算相似度矩阵
-        embeddings = [embeddings_dict[item['word']] for item in group_items]
-        similarity_matrix = cosine_similarity(embeddings)
-        
-        plt.figure(figsize=(max(20, len(words) * 0.8), max(16, len(words) * 0.7)))
-        sns.heatmap(similarity_matrix, 
-                    xticklabels=words, 
-                    yticklabels=words,
-                    annot=True, 
-                    fmt='.2f',
-                    cmap='YlOrRd',
-                    cbar_kws={'label': '语义相似度'},
-                    square=True,
-                    annot_kws={'size': 8})
-        plt.title(f'词汇语义相似度热力图 - {group_key[0]} ({group_key[1]})', 
-                 fontsize=20, pad=20, fontweight='bold', fontfamily='sans-serif')
-    else:
-        # 多个分组，生成子图 - 纵向排列（多行）
-        fig, axes = plt.subplots(num_groups, 1, figsize=(20, 16 * num_groups))
+
+    d = max(2, min(6, int(heatmap_decimal_places)))
+    fmt_str = f'.{d}f'
+    cjk_font = get_matplotlib_cjk_font_family()
+    sans_chain = plt.rcParams.get('font.sans-serif', [])
+    merged_sans = [cjk_font] + [x for x in sans_chain if x != cjk_font]
+
+    with plt.rc_context({'font.sans-serif': merged_sans, 'axes.unicode_minus': False}):
+        # 如果只有一个分组，直接生成单个热力图
         if num_groups == 1:
-            axes = [axes]
-        
-        for idx, (group_key, group_items) in enumerate(groups.items()):
+            group_key = list(groups.keys())[0]
+            group_items = groups[group_key]
             words = [item['word'] for item in group_items]
-            embeddings = [embeddings_dict[item['word']] for item in group_items]
+            
+            # 计算相似度矩阵（按节点在 data_list 中的位置取向量，避免同词覆盖）
+            embeddings = emb_array[[idx_of[id(it)] for it in group_items]]
             similarity_matrix = cosine_similarity(embeddings)
             
-            ax = axes[idx]
-            sns.heatmap(similarity_matrix, 
+            nw = len(words)
+            heatmap_annot_font = 5 if nw > 20 else (6 if nw > 14 else 8)
+
+            plt.figure(figsize=(max(20, len(words) * 0.8), max(16, len(words) * 0.7)))
+            ax0 = sns.heatmap(similarity_matrix, 
                         xticklabels=words, 
                         yticklabels=words,
                         annot=True, 
-                        fmt='.2f',
+                        fmt=fmt_str,
                         cmap='YlOrRd',
                         cbar_kws={'label': '语义相似度'},
                         square=True,
-                        annot_kws={'size': 8},
-                        ax=ax)
-            ax.set_title(f'{group_key[0]} ({group_key[1]})', fontsize=18, fontweight='bold', pad=15, fontfamily='sans-serif')
-            ax.set_xlabel('词汇', fontsize=14, fontfamily='sans-serif')
-            ax.set_ylabel('词汇', fontsize=14, fontfamily='sans-serif')
-            plt.setp(ax.get_xticklabels(), rotation=45, ha='right', fontsize=10)
-            plt.setp(ax.get_yticklabels(), rotation=0, fontsize=10)
+                        annot_kws={'size': heatmap_annot_font, 'family': cjk_font})
+            plt.setp(ax0.get_xticklabels(), rotation=45, ha='right', fontsize=10, fontfamily=cjk_font)
+            plt.setp(ax0.get_yticklabels(), rotation=0, fontsize=10, fontfamily=cjk_font)
+            plt.title(f'词汇语义相似度热力图 - {group_key[0]} ({group_key[1]})', 
+                     fontsize=20, pad=20, fontweight='bold', fontfamily=cjk_font)
+        else:
+            # 多个分组，生成子图 - 纵向排列（多行）
+            fig, axes = plt.subplots(num_groups, 1, figsize=(20, 16 * num_groups))
+            if num_groups == 1:
+                axes = [axes]
+            
+            for idx, (group_key, group_items) in enumerate(groups.items()):
+                words = [item['word'] for item in group_items]
+                embeddings = emb_array[[idx_of[id(it)] for it in group_items]]
+                similarity_matrix = cosine_similarity(embeddings)
+                
+                nw = len(words)
+                heatmap_annot_font = 5 if nw > 20 else (6 if nw > 14 else 8)
+
+                ax = axes[idx]
+                sns.heatmap(similarity_matrix, 
+                            xticklabels=words, 
+                            yticklabels=words,
+                            annot=True, 
+                            fmt=fmt_str,
+                            cmap='YlOrRd',
+                            cbar_kws={'label': '语义相似度'},
+                            square=True,
+                            annot_kws={'size': heatmap_annot_font, 'family': cjk_font},
+                            ax=ax)
+                ax.set_title(f'{group_key[0]} ({group_key[1]})', fontsize=18, fontweight='bold', pad=15, fontfamily=cjk_font)
+                ax.set_xlabel('词汇', fontsize=14, fontfamily=cjk_font)
+                ax.set_ylabel('词汇', fontsize=14, fontfamily=cjk_font)
+                plt.setp(ax.get_xticklabels(), rotation=45, ha='right', fontsize=10, fontfamily=cjk_font)
+                plt.setp(ax.get_yticklabels(), rotation=0, fontsize=10, fontfamily=cjk_font)
+            
+            plt.suptitle('词汇语义相似度热力图（按分类和语言分组）', 
+                        fontsize=22, fontweight='bold', y=0.995, fontfamily=cjk_font)
         
-        plt.suptitle('词汇语义相似度热力图（按分类和语言分组）', 
-                    fontsize=22, fontweight='bold', y=0.995, fontfamily='sans-serif')
-    
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
-    plt.close()
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
     return output_path
 
 def generate_network_graph_weighted(data_list, embeddings_dict, output_path, threshold=0.3, centrality_type='degree', power=5):
@@ -1469,10 +1590,17 @@ def upload_file():
             # 生成可视化
             results = {}
             
+            try:
+                hdp = int(request.form.get('heatmap_decimal_places', 4))
+            except (TypeError, ValueError):
+                hdp = 4
+            hdp = max(2, min(6, hdp))
+            
             # 1. 热力图（按分类和语言分组）
             heatmap_path = os.path.join(app.config['RESULTS_FOLDER'], f'heatmap_{result_timestamp}.png')
-            generate_heatmap(data_list, embeddings_dict, heatmap_path)
+            generate_heatmap(data_list, emb_matrix, heatmap_path, heatmap_decimal_places=hdp)
             results['heatmap'] = f'/results/heatmap_{result_timestamp}.png'
+            results['heatmap_decimal_places'] = hdp
             
             # 2. 网络图（两个图：加权度中心性和加权特征向量中心性）
             threshold = float(request.form.get('threshold', 0.3))

@@ -38,6 +38,18 @@
                         <small>控制节点大小的非线性映射（1=线性，2=平方，3=立方，数值越大高值节点差异越明显）</small>
                     </div>
 
+                    <div class="form-group">
+                        <label for="heatmap_decimal_places">热力图格内小数位数:</label>
+                        <select id="heatmap_decimal_places" name="heatmap_decimal_places">
+                            <option value="2">2 位</option>
+                            <option value="3">3 位</option>
+                            <option value="4" selected>4 位（推荐）</option>
+                            <option value="5">5 位</option>
+                            <option value="6">6 位</option>
+                        </select>
+                        <small>相似度接近 1 时，位数越多越容易区分；位数多且词多时格子会较挤。</small>
+                    </div>
+
                     <div class="form-group optional-analysis">
                         <label><input type="checkbox" id="run_loo" name="run_loo" value="1"> 运行 Leave-one-submodule-out 敏感性检验（需词汇含 submodule 列；较慢）</label>
                     </div>
