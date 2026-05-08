@@ -506,6 +506,62 @@ footer {
     font-size: 0.85em;
 }
 
+/* 多模型验证：复选框网格 */
+.cross-model-header {
+    font-weight: 500;
+    margin-bottom: 6px;
+    color: #1a202c;
+}
+.cross-model-note {
+    font-size: 0.85em;
+    color: #64748b;
+    margin-bottom: 12px;
+    line-height: 1.45;
+}
+.cross-model-note code {
+    font-size: 0.92em;
+    background: #f1f5f9;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.model-check-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+.model-check-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 0.95em;
+    color: #334155;
+}
+.model-check-item input {
+    width: 1rem;
+    height: 1rem;
+    accent-color: #3b82f6;
+}
+.cross-model-custom-label {
+    display: block;
+    font-size: 0.9em;
+    color: #475569;
+    margin-bottom: 6px;
+}
+.cross-model-custom-input {
+    width: 100%;
+    max-width: 40rem;
+    padding: 8px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 0.95em;
+}
+
 @media (max-width: 768px) {
     .container {
         padding: 30px 20px;

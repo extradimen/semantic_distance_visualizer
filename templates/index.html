@@ -37,6 +37,33 @@
                         <input type="number" id="power" name="power" value="5" min="1" max="10" step="0.5" required>
                         <small>控制节点大小的非线性映射（1=线性，2=平方，3=立方，数值越大高值节点差异越明显）</small>
                     </div>
+
+                    <div class="form-group optional-analysis">
+                        <label><input type="checkbox" id="run_loo" name="run_loo" value="1"> 运行 Leave-one-submodule-out 敏感性检验（需词汇含 submodule 列；较慢）</label>
+                    </div>
+                    <div class="form-group optional-analysis">
+                        <label><input type="checkbox" id="run_rs" name="run_rs" value="1"> 运行 Random subsampling 稳健性检验（100 轮随机抽样，较慢）</label>
+                        <div style="margin-top:8px;">
+                            <label for="remove_ratio">每类删除比例:</label>
+                            <input type="number" id="remove_ratio" name="remove_ratio" value="0.2" min="0.05" max="0.5" step="0.05" style="width:5rem;">
+                            <label for="n_iter" style="margin-left:12px;">迭代次数:</label>
+                            <input type="number" id="n_iter" name="n_iter" value="100" min="10" max="500" step="10" style="width:5rem;">
+                        </div>
+                    </div>
+                    <div class="form-group optional-analysis">
+                        <div class="cross-model-header">多模型交叉验证（勾选与当前 baseline 对比的模型，会额外加载权重，较耗时）</div>
+                        <p class="cross-model-note">Baseline 固定为 <code>paraphrase-multilingual-MiniLM-L12-v2</code>（与主分析相同），请勿再选等效模型。</p>
+                        <p class="cross-model-note">若服务器<strong>无法访问 Hugging Face</strong>且本地未缓存对应模型，勾选额外模型会导致长时间等待或失败；无网环境请<strong>不要勾选</strong>多模型，仅用主分析即可。</p>
+                        <div class="model-check-grid" role="group" aria-label="附加嵌入模型">
+                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/LaBSE"> LaBSE</label>
+                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/distiluse-base-multilingual-cased-v2"> distiluse-base-multilingual-cased-v2</label>
+                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="intfloat/multilingual-e5-base"> multilingual-e5-base</label>
+                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="intfloat/multilingual-e5-large"> multilingual-e5-large</label>
+                            <label class="model-check-item"><input type="checkbox" class="cross-model-cb" value="sentence-transformers/paraphrase-multilingual-mpnet-base-v2"> paraphrase-multilingual-mpnet-base-v2</label>
+                        </div>
+                        <label for="cross_models_custom" class="cross-model-custom-label">其他模型 ID（可选，多个用英文逗号分隔）</label>
+                        <input type="text" id="cross_models_custom" class="cross-model-custom-input" autocomplete="off" placeholder="例如：Alibaba-NLP/gte-multilingual-base">
+                    </div>
                     
                     <button type="button" class="btn-primary" id="submitBtn">
                         <span class="btn-text">🚀 开始分析</span>
@@ -49,6 +76,7 @@
                     <ul>
                         <li><strong>第一行：</strong>标题行（列名，如：Class, English, Chinese, Japanese等）</li>
                         <li><strong>第一列：</strong>Class（分类，如：Trade、CrossCulture等）</li>
+                        <li><strong>可选列：</strong><code>submodule</code>、<code>concept_id</code>（用于子模块检验与跨语言配对）</li>
                         <li><strong>后续列：</strong>不同语言的词汇列（如：English, Chinese, Japanese等）</li>
                     </ul>
                     <div class="example">
@@ -74,6 +102,7 @@
             <h2>📊 分析结果</h2>
             <div class="results-info">
                 <p>共分析了 <span id="wordCount">0</span> 个词汇</p>
+                <p id="mdsStressLine" class="hidden">MDS Stress（2D / 3D，cosine distance）：<span id="mdsStressVals"></span></p>
             </div>
 
             <div class="visualization-section">
@@ -153,13 +182,23 @@
             </div>
 
             <div class="similarity-table-section">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h3>🔗 最相似的词汇对（Top 20）</h3>
-                    <button id="downloadExcelBtn" class="btn-primary" style="display: none;">
-                        <span class="btn-text">📥 下载完整相似度数据（Excel）</span>
-                    </button>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h3 style="margin:0;">🔗 最相似的词汇对（Top 20）</h3>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <button type="button" id="downloadExcelBtn" class="btn-primary" style="display: none;">
+                            <span class="btn-text">📥 similarity_data.xlsx</span>
+                        </button>
+                        <button type="button" id="downloadEmpiricalBtn" class="btn-primary" style="display: none;">
+                            <span class="btn-text">📥 empirical_tables.xlsx</span>
+                        </button>
+                        <button type="button" id="downloadRobustnessBtn" class="btn-primary" style="display: none;">
+                            <span class="btn-text">📥 robustness_tables.xlsx</span>
+                        </button>
+                        <button type="button" id="downloadCrossModelBtn" class="btn-primary" style="display: none;">
+                            <span class="btn-text">📥 cross_model_validation.xlsx</span>
+                        </button>
+                    </div>
                 </div>
-                <h3>🔗 最相似的词汇对（Top 20）</h3>
                 <div class="table-container">
                     <table id="similarityTable">
                         <thead>

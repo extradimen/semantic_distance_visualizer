@@ -100,6 +100,28 @@ document.addEventListener('DOMContentLoaded', function() {
         const formData = new FormData(form);
         formData.append('threshold', threshold);
         formData.append('power', power);
+        if (document.getElementById('run_loo') && document.getElementById('run_loo').checked) {
+            formData.set('run_loo', '1');
+        }
+        if (document.getElementById('run_rs') && document.getElementById('run_rs').checked) {
+            formData.set('run_rs', '1');
+        }
+
+        // 多模型：勾选 + 自定义文本，合并为 cross_models（与后端约定）
+        formData.delete('cross_models');
+        const crossParts = [];
+        document.querySelectorAll('.cross-model-cb:checked').forEach(function(cb) {
+            crossParts.push(cb.value);
+        });
+        const customEl = document.getElementById('cross_models_custom');
+        if (customEl && customEl.value.trim()) {
+            customEl.value.split(/[,，]+/).map(function(s) { return s.trim(); }).filter(Boolean).forEach(function(s) {
+                crossParts.push(s);
+            });
+        }
+        if (crossParts.length) {
+            formData.set('cross_models', crossParts.join('\n'));
+        }
 
         // 隐藏之前的结果和错误
         results.classList.add('hidden');
@@ -148,6 +170,15 @@ document.addEventListener('DOMContentLoaded', function() {
     function displayResults(data) {
         // 更新词汇数量
         document.getElementById('wordCount').textContent = data.word_count;
+
+        const stressLine = document.getElementById('mdsStressLine');
+        const stressVals = document.getElementById('mdsStressVals');
+        if (data.mds_stress_2d !== undefined && data.mds_stress_3d !== undefined && stressLine && stressVals) {
+            stressVals.textContent = `${Number(data.mds_stress_2d).toExponential(4)} / ${Number(data.mds_stress_3d).toExponential(4)}`;
+            stressLine.classList.remove('hidden');
+        } else if (stressLine) {
+            stressLine.classList.add('hidden');
+        }
 
         // 显示热力图（可能是多个）
         const heatmapContainer = document.getElementById('heatmapContainer');
@@ -227,14 +258,23 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
-        // 显示Excel下载按钮
-        const downloadExcelBtn = document.getElementById('downloadExcelBtn');
-        if (downloadExcelBtn && data.excel_download) {
-            downloadExcelBtn.style.display = 'inline-block';
-            downloadExcelBtn.onclick = function() {
-                window.location.href = data.excel_download;
-            };
+        function wireDownload(btnId, urlKey) {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            if (data[urlKey]) {
+                btn.style.display = 'inline-block';
+                btn.onclick = function() {
+                    window.location.href = data[urlKey];
+                };
+            } else {
+                btn.style.display = 'none';
+                btn.onclick = null;
+            }
         }
+        wireDownload('downloadExcelBtn', 'excel_download');
+        wireDownload('downloadEmpiricalBtn', 'empirical_tables_download');
+        wireDownload('downloadRobustnessBtn', 'robustness_tables_download');
+        wireDownload('downloadCrossModelBtn', 'cross_model_validation_download');
 
         // 显示结果区域
         results.classList.remove('hidden');

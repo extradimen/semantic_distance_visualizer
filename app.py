@@ -1,6 +1,9 @@
 from flask import Flask, render_template, request, jsonify, send_file
 import os
 import json
+import re
+import random
+from collections import defaultdict
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -53,117 +56,484 @@ modelscope_cache_dir = os.path.join(cache_dir, 'modelscope', 'hub')
 # 加载预训练模型（优先从 ModelScope 加载，适用于中国大陆用户）
 print("正在加载语义嵌入模型...")
 try:
-    # 尝试从 ModelScope 加载
-    try:
-        from modelscope import snapshot_download
-        print(f"正在从 ModelScope 下载模型: {modelscope_model_id}")
-        model_dir = snapshot_download(modelscope_model_id, cache_dir=modelscope_cache_dir)
-        print(f"模型已下载到: {model_dir}")
-        # 从本地路径加载模型
-        model = SentenceTransformer(model_dir)
-        print("✅ 模型已从 ModelScope 加载完成！")
-    except ImportError:
-        print("⚠️  ModelScope SDK 未安装，尝试从 Hugging Face 加载...")
-        print("   提示: 如需从 ModelScope 加载，请运行: pip install modelscope")
-        # 回退到 Hugging Face
-        hf_cache_dir = os.path.join(cache_dir, 'huggingface')
-        os.makedirs(hf_cache_dir, exist_ok=True)
-        os.environ['HF_HOME'] = hf_cache_dir
-        os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
-        model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-        print("✅ 模型已从 Hugging Face 加载完成！")
-    except Exception as e:
-        print(f"⚠️  从 ModelScope 加载失败: {e}")
-        print("   回退到 Hugging Face...")
-        # 回退到 Hugging Face
-        hf_cache_dir = os.path.join(cache_dir, 'huggingface')
-        os.makedirs(hf_cache_dir, exist_ok=True)
-        os.environ['HF_HOME'] = hf_cache_dir
-        os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
-        model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-        print("✅ 模型已从 Hugging Face 加载完成！")
+    # 若此前已缓存完整模型，离线环境直接使用本地目录，避免 snapshot_download / HF 联网失败
+    _local_ms = os.path.join(
+        modelscope_cache_dir,
+        modelscope_model_id.replace("/", os.sep),
+    )
+    if os.path.isfile(os.path.join(_local_ms, "modules.json")):
+        print(f"使用本地已缓存模型: {_local_ms}")
+        model = SentenceTransformer(_local_ms)
+        print("✅ 模型已从本地 ModelScope 缓存加载完成！")
+    else:
+        # 尝试从 ModelScope 加载
+        try:
+            from modelscope import snapshot_download
+            print(f"正在从 ModelScope 下载模型: {modelscope_model_id}")
+            model_dir = snapshot_download(modelscope_model_id, cache_dir=modelscope_cache_dir)
+            print(f"模型已下载到: {model_dir}")
+            # 从本地路径加载模型
+            model = SentenceTransformer(model_dir)
+            print("✅ 模型已从 ModelScope 加载完成！")
+        except ImportError:
+            print("⚠️  ModelScope SDK 未安装，尝试从 Hugging Face 加载...")
+            print("   提示: 如需从 ModelScope 加载，请运行: pip install modelscope")
+            # 回退到 Hugging Face
+            hf_cache_dir = os.path.join(cache_dir, 'huggingface')
+            os.makedirs(hf_cache_dir, exist_ok=True)
+            os.environ['HF_HOME'] = hf_cache_dir
+            os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
+            model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+            print("✅ 模型已从 Hugging Face 加载完成！")
+        except Exception as e:
+            print(f"⚠️  从 ModelScope 加载失败: {e}")
+            print("   回退到 Hugging Face...")
+            # 回退到 Hugging Face
+            hf_cache_dir = os.path.join(cache_dir, 'huggingface')
+            os.makedirs(hf_cache_dir, exist_ok=True)
+            os.environ['HF_HOME'] = hf_cache_dir
+            os.environ['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
+            model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+            print("✅ 模型已从 Hugging Face 加载完成！")
 except Exception as e:
     print(f"❌ 模型加载失败: {e}")
     raise
 
+# ---------------------------- 论文实证分析辅助函数 ----------------------------
+
+def _norm_col_name(c):
+    return re.sub(r'\s+', '', str(c).strip().lower())
+
+
+def canonical_language(lang):
+    """将列名归一为 Chinese / English / Other（用于 Language Pair 汇总）。"""
+    s = _norm_col_name(lang)
+    if 'chinese' in s or s in ('中文', '汉语'):
+        return 'Chinese'
+    if 'english' in s or s == '英文':
+        return 'English'
+    return str(lang).strip() or 'Other'
+
+
+def canonical_domain(category):
+    """将 Class/Domain 粗分为 Trade / Intercultural；其余保留原标签便于表格展示。"""
+    s = str(category).strip().lower()
+    if not s:
+        return 'Unknown'
+    if 'trade' in s:
+        return 'Trade'
+    if 'intercultural' in s or 'crossculture' in s.replace(' ', '') or 'cross-culture' in s:
+        return 'Intercultural'
+    return str(category).strip()
+
+
+def language_pair_label(lang1, lang2):
+    c1, c2 = canonical_language(lang1), canonical_language(lang2)
+    a, b = sorted([c1, c2])
+    if a == 'Chinese' and b == 'Chinese':
+        return 'Chinese–Chinese'
+    if a == 'English' and b == 'English':
+        return 'English–English'
+    if {c1, c2} == {'Chinese', 'English'}:
+        return 'Chinese–English'
+    return f'{c1}–{c2}'
+
+
+def domain_pair_type(d1, d2):
+    """Trade–Trade / Intercultural–Intercultural / Trade–Intercultural"""
+    x, y = canonical_domain(d1), canonical_domain(d2)
+    if x == 'Trade' and y == 'Trade':
+        return 'Trade–Trade'
+    if x == 'Intercultural' and y == 'Intercultural':
+        return 'Intercultural–Intercultural'
+    if {x, y} == {'Trade', 'Intercultural'}:
+        return 'Trade–Intercultural'
+    return f'{x}–{y}'
+
+
+def semantic_distance_matrix_from_embeddings(embeddings):
+    """与论文一致：cosine distance = 1 - cosine_similarity。"""
+    sim = cosine_similarity(embeddings)
+    return 1.0 - sim
+
+
+def _huggingface_host_reachable(timeout=2.5):
+    """无网时避免 SentenceTransformer 对 huggingface.co 反复重试（否则会卡住很久）。"""
+    try:
+        import socket
+        socket.create_connection(('huggingface.co', 443), timeout=timeout)
+        return True
+    except OSError:
+        return False
+
+
+def _hf_hub_snapshot_path(model_id, hub_root):
+    """在 HF Hub 缓存目录查找 models--org--name/snapshots/<hash>。"""
+    if not hub_root or not os.path.isdir(hub_root):
+        return None
+    repo_folder = 'models--' + model_id.replace('/', '--')
+    snaps = os.path.join(hub_root, repo_folder, 'snapshots')
+    if not os.path.isdir(snaps):
+        return None
+    for entry in sorted(os.listdir(snaps), reverse=True):
+        sp = os.path.join(snaps, entry)
+        if not os.path.isdir(sp):
+            continue
+        if os.path.isfile(os.path.join(sp, 'modules.json')):
+            return sp
+        if os.path.isfile(os.path.join(sp, 'config_sentence_transformers.json')):
+            return sp
+    return None
+
+
+def get_sentence_transformer(model_name_or_path, cache_root=None):
+    """加载 SentenceTransformer：本地目录、ModelScope、HF 本地缓存，最后才联网下载。"""
+    if cache_root is None:
+        cache_root = cache_dir
+    # 已是本地目录且含 sentence-transformers 配置
+    if os.path.isdir(model_name_or_path) and os.path.isfile(
+        os.path.join(model_name_or_path, 'config_sentence_transformers.json')
+    ):
+        return SentenceTransformer(model_name_or_path)
+    # ModelScope 风格缓存路径 extradimen/xxx
+    ms_local = os.path.join(
+        cache_root, 'modelscope', 'hub', model_name_or_path.replace('/', os.sep)
+    )
+    if os.path.isfile(os.path.join(ms_local, 'modules.json')):
+        return SentenceTransformer(ms_local)
+
+    hf_hub_roots = [
+        os.path.join(cache_root, 'huggingface', 'hub'),
+        os.path.expanduser('~/.cache/huggingface/hub'),
+    ]
+    for hr in hf_hub_roots:
+        snap = _hf_hub_snapshot_path(model_name_or_path, hr)
+        if snap:
+            return SentenceTransformer(snap)
+
+    if not _huggingface_host_reachable():
+        raise RuntimeError(
+            '无法连接 huggingface.co，且本地未找到该模型的 Hugging Face 缓存。'
+            '请取消「多模型验证」勾选，或先在可联网环境下载模型到 ~/.cache/huggingface/hub。'
+        )
+    return SentenceTransformer(model_name_or_path)
+
+
+def build_threshold_graph(data_list, similarity_matrix, threshold):
+    """similarity > threshold 的加权无向图；边属性 weight=similarity，distance=1/weight。"""
+    n = len(data_list)
+    G = nx.Graph()
+    for i in range(n):
+        G.add_node(
+            i,
+            word=data_list[i]['word'],
+            language=data_list[i].get('language', ''),
+            domain=data_list[i].get('category', ''),
+            submodule=data_list[i].get('submodule', ''),
+        )
+    for i in range(n):
+        for j in range(i + 1, n):
+            s = float(similarity_matrix[i, j])
+            if s > threshold:
+                w = max(s, 1e-9)
+                G.add_edge(i, j, weight=w, similarity=s, distance=1.0 / w)
+    return G
+
+
+def compute_network_centralities(G):
+    """返回 dict[node_id] -> weighted_degree, eigenvector, betweenness"""
+    n_nodes = G.number_of_nodes()
+    wd = {n: 0.0 for n in G.nodes()}
+    for u, v, dat in G.edges(data=True):
+        w = dat.get('weight', dat.get('similarity', 0))
+        wd[u] += w
+        wd[v] += w
+
+    ev = {n: 0.0 for n in G.nodes()}
+    if n_nodes > 0:
+        try:
+            ev_calc = nx.eigenvector_centrality_numpy(G, weight='weight')
+            ev.update(ev_calc)
+        except Exception:
+            try:
+                ev_calc = nx.eigenvector_centrality(G, weight='weight', max_iter=500)
+                ev.update(ev_calc)
+            except Exception:
+                pass
+
+    bw = {n: 0.0 for n in G.nodes()}
+    if n_nodes > 1:
+        try:
+            bw_calc = nx.betweenness_centrality(G, weight='distance', normalized=True)
+            bw.update(bw_calc)
+        except Exception:
+            try:
+                bw_calc = nx.betweenness_centrality(G, normalized=True)
+                bw.update(bw_calc)
+            except Exception:
+                pass
+
+    return wd, ev, bw
+
+
+def similarity_upper_tri_pearson(sim_a, sim_b):
+    """两相似度矩阵上三角 Pearson 相关（词序须一致）。"""
+    assert sim_a.shape == sim_b.shape
+    iu = np.triu_indices(sim_a.shape[0], k=1)
+    x = sim_a[iu].flatten()
+    y = sim_b[iu].flatten()
+    if len(x) < 2 or np.std(x) < 1e-12 or np.std(y) < 1e-12:
+        return float('nan')
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def mean_similarity_by_domain_groups(similarity_matrix, data_list, mask):
+    """在给定节点 mask 下，计算 Trade–Trade / II / TI 平均相似度（仅 i<j 且两节点均在 mask）。"""
+    idx = np.where(mask)[0]
+    trade_m = []
+    inter_m = []
+    cross_m = []
+    for ii in range(len(idx)):
+        for jj in range(ii + 1, len(idx)):
+            i, j = int(idx[ii]), int(idx[jj])
+            d1 = canonical_domain(data_list[i]['category'])
+            d2 = canonical_domain(data_list[j]['category'])
+            s = float(similarity_matrix[i, j])
+            if d1 == 'Trade' and d2 == 'Trade':
+                trade_m.append(s)
+            elif d1 == 'Intercultural' and d2 == 'Intercultural':
+                inter_m.append(s)
+            elif {d1, d2} == {'Trade', 'Intercultural'}:
+                cross_m.append(s)
+    return (
+        float(np.mean(trade_m)) if trade_m else float('nan'),
+        float(np.mean(inter_m)) if inter_m else float('nan'),
+        float(np.mean(cross_m)) if cross_m else float('nan'),
+    )
+
+
+def top_k_bridge_words(data_list, similarity_matrix, threshold, k=5, excluded_indices=None):
+    """Bridge Score = cross-domain sim sum + betweenness；仅统计 sim>threshold 的跨 domain 边。"""
+    n = len(data_list)
+    G = build_threshold_graph(data_list, similarity_matrix, threshold)
+    _, _, bw = compute_network_centralities(G)
+
+    ex = set(excluded_indices or [])
+    scores = []
+    for i in range(n):
+        if i in ex:
+            continue
+        di = canonical_domain(data_list[i]['category'])
+        cd_sum = 0.0
+        for j in range(n):
+            if i == j or j in ex:
+                continue
+            dj = canonical_domain(data_list[j]['category'])
+            if di == dj:
+                continue
+            s = float(similarity_matrix[i, j])
+            if s > threshold:
+                cd_sum += s
+        b = float(bw.get(i, 0.0))
+        scores.append((cd_sum + b, data_list[i]['word'], i))
+    scores.sort(key=lambda x: -x[0])
+    return [t[1] for t in scores[:k]]
+
+
+def top_k_central_words(data_list, similarity_matrix, threshold, k=5, excluded_indices=None):
+    """按加权度中心性排名。"""
+    n = len(data_list)
+    G = build_threshold_graph(data_list, similarity_matrix, threshold)
+    wd, _, _ = compute_network_centralities(G)
+    ex = set(excluded_indices or [])
+    ranked = sorted(
+        [(wd.get(i, 0.0), data_list[i]['word']) for i in range(n) if i not in ex],
+        key=lambda x: -x[0],
+    )
+    return [t[1] for t in ranked[:k]]
+
+
+def run_leave_one_submodule_out(data_list, similarity_matrix, threshold):
+    """Leave-one-submodule-out：每次移除一个 submodule 标签对应的全部词。"""
+    subs = sorted(set(str(item.get('submodule', '') or '') for item in data_list))
+    rows = []
+    for rem in subs:
+        if rem == '':
+            continue  # 不删除「空 submodule」作为一轮，避免清空全部无标签数据
+        mask = np.array([str(item.get('submodule', '') or '') != rem for item in data_list])
+        if mask.sum() < 2:
+            continue
+        tm, im, cm = mean_similarity_by_domain_groups(similarity_matrix, data_list, mask)
+        sub_data = [data_list[i] for i in range(len(data_list)) if mask[i]]
+        sub_sim = similarity_matrix[np.ix_(mask, mask)]
+        bridges = top_k_bridge_words(sub_data, sub_sim, threshold, k=5)
+        central = top_k_central_words(sub_data, sub_sim, threshold, k=5)
+        rows.append({
+            'Removed Submodule': rem,
+            'Remaining N': int(mask.sum()),
+            'Trade Mean': tm,
+            'Intercultural Mean': im,
+            'Cross-domain Mean': cm,
+            'Top Bridge Concepts': ', '.join(bridges),
+            'Top Central Concepts': ', '.join(central),
+        })
+    return pd.DataFrame(rows)
+
+
+def run_random_subsampling(data_list, similarity_matrix, threshold, remove_ratio=0.2, n_iter=100, seed=42):
+    """从 Trade / Intercultural 各类内各随机删相同比例，保持两类大致平衡。"""
+    rng = random.Random(seed)
+    trade_idx = [i for i, item in enumerate(data_list) if canonical_domain(item['category']) == 'Trade']
+    inter_idx = [i for i, item in enumerate(data_list) if canonical_domain(item['category']) == 'Intercultural']
+
+    trade_means, inter_means, cross_means = [], [], []
+    bridge_counts = {}
+
+    if not trade_idx or not inter_idx:
+        return pd.DataFrame(), pd.DataFrame()
+
+    n_remove_t = max(1, int(len(trade_idx) * remove_ratio))
+    n_remove_i = max(1, int(len(inter_idx) * remove_ratio))
+
+    for _ in range(n_iter):
+        if len(trade_idx) - n_remove_t < 1 or len(inter_idx) - n_remove_i < 1:
+            break
+        kt = set(rng.sample(trade_idx, n_remove_t))
+        ki = set(rng.sample(inter_idx, n_remove_i))
+        removed = kt | ki
+        mask = np.array([i not in removed for i in range(len(data_list))])
+        if mask.sum() < 2:
+            continue
+        tm, im, cm = mean_similarity_by_domain_groups(similarity_matrix, data_list, mask)
+        trade_means.append(tm)
+        inter_means.append(im)
+        cross_means.append(cm)
+
+        sub_data = [data_list[i] for i in range(len(data_list)) if mask[i]]
+        sub_sim = similarity_matrix[np.ix_(mask, mask)]
+        top_b = top_k_bridge_words(sub_data, sub_sim, threshold, k=10)
+        for w in top_b:
+            bridge_counts[w] = bridge_counts.get(w, 0) + 1
+
+    def _safe_mean_sd(arr):
+        if not arr:
+            return np.nan, np.nan
+        a = np.asarray(arr, dtype=float)
+        return float(np.nanmean(a)), float(np.nanstd(a))
+
+    tm_avg, tm_sd = _safe_mean_sd(trade_means)
+    im_avg, im_sd = _safe_mean_sd(inter_means)
+    cm_avg, cm_sd = _safe_mean_sd(cross_means)
+
+    summary = pd.DataFrame([{
+        'Iterations': len(trade_means),
+        'Remove Ratio': remove_ratio,
+        'Trade Mean Avg': tm_avg,
+        'Trade Mean SD': tm_sd,
+        'Intercultural Mean Avg': im_avg,
+        'Intercultural Mean SD': im_sd,
+        'Cross-domain Mean Avg': cm_avg,
+        'Cross-domain Mean SD': cm_sd,
+    }])
+
+    stab = pd.DataFrame(
+        [{'Concept': k, 'Appeared in Top 10 Times': v, 'Frequency': v / max(len(trade_means), 1)}
+         for k, v in sorted(bridge_counts.items(), key=lambda x: -x[1])]
+    )
+    return summary, stab
+
+
 def parse_vocabulary_file(file_path, filename):
     """解析上传的词汇文件，支持CSV和Excel格式
-    格式：第一行是标题（跳过），第一列Class，后续列为不同语言的词汇列（English, Chinese, Japanese等）
-    返回: list of dict, 每个dict包含 {'category': 分类, 'word': 词汇, 'language': 语言}
-    每种语言的词汇分别作为独立节点
+    格式：第一列 Class；可选 submodule / concept_id 列；其余列为各语言词汇。
+    返回: list of dict，含 category, word, language, submodule, row_index, concept_id(可选)
     """
     data = []
-    
-    # 根据文件扩展名选择解析方式
+
     if filename.endswith('.xlsx') or filename.endswith('.xls'):
-        # Excel文件
         try:
-            df = pd.read_excel(file_path, header=0)  # 第一行作为标题
+            df = pd.read_excel(file_path, header=0)
         except Exception as e:
             raise ValueError(f"无法读取Excel文件: {str(e)}")
     elif filename.endswith('.csv'):
-        # CSV文件
         try:
-            df = pd.read_csv(file_path, header=0, encoding='utf-8')  # 第一行作为标题
+            df = pd.read_csv(file_path, header=0, encoding='utf-8')
         except UnicodeDecodeError:
-            # 尝试其他编码
             df = pd.read_csv(file_path, header=0, encoding='gbk')
     else:
         raise ValueError("不支持的文件格式，请上传CSV或Excel文件")
-    
-    # 检查列数
+
     if df.shape[1] < 2:
         raise ValueError("文件必须包含至少2列：Class和至少一种语言的词汇列")
-    
-    # 获取列名（第一行标题）
+
     columns = df.columns.tolist()
-    
-    # 第一列是Class（分类）
     class_col = columns[0]
-    
-    # 从第二列开始是语言列（English, Chinese, Japanese等）
-    language_cols = columns[1:]
-    
-    # 解析数据：每种语言的词汇分别作为独立节点
+
+    submodule_col = None
+    concept_col = None
+    reserved = set()
+
+    for col in columns[1:]:
+        nc = _norm_col_name(col)
+        if nc in ('submodule', 'sub_module', '子模块'):
+            submodule_col = col
+            reserved.add(col)
+        elif nc in ('concept_id', 'conceptid'):
+            concept_col = col
+            reserved.add(col)
+
+    language_cols = [c for c in columns[1:] if c not in reserved]
+    if not language_cols:
+        raise ValueError("未找到语言词汇列（请确保除 Class/submodule/concept_id 外仍有语言列）")
+
     for idx, row in df.iterrows():
         category = str(row[class_col]).strip() if pd.notna(row[class_col]) else ''
-        
-        # 跳过空行（分类为空且所有词汇都为空）
+
+        sub_val = ''
+        if submodule_col is not None and pd.notna(row[submodule_col]):
+            sub_val = str(row[submodule_col]).strip()
+
+        if concept_col is not None and pd.notna(row[concept_col]):
+            cid = str(row[concept_col]).strip()
+        else:
+            cid = ''
+
         if not category:
             continue
-        
-        # 处理每种语言的词汇列
+
         for lang_col in language_cols:
             word = str(row[lang_col]).strip() if pd.notna(row[lang_col]) else ''
-            
-            # 如果词汇不为空，添加节点
             if word:
-                # 从列名推断语言（如 "English" -> "English", "Chinese" -> "Chinese"）
                 language = lang_col.strip()
-                data.append({
+                item = {
                     'category': category,
                     'word': word,
                     'language': language,
-                    'row_index': idx  # 记录原始行号，用于识别同一行的词
-                })
-    
+                    'submodule': sub_val,
+                    'row_index': idx,
+                }
+                if cid:
+                    item['concept_id'] = cid
+                data.append(item)
+
     if len(data) == 0:
         raise ValueError("文件中没有有效数据")
-    
+
     return data
 
-def calculate_semantic_distances(data_list):
-    """计算词汇间的语义距离
-    返回: embeddings_dict (词汇 -> 嵌入向量)
-    """
+
+def calculate_semantic_distances(data_list, st_model=None):
+    """计算词汇语义嵌入。返回 (embeddings_dict, embeddings_ordered ndarray [n, dim])。"""
+    if st_model is None:
+        st_model = model
     words = [item['word'] for item in data_list]
     print(f"正在计算 {len(words)} 个词汇的语义嵌入...")
-    embeddings = model.encode(words, show_progress_bar=True)
-    
-    # 创建词汇到嵌入向量的字典
-    embeddings_dict = {item['word']: emb for item, emb in zip(data_list, embeddings)}
-    
-    return embeddings_dict
+    embeddings = st_model.encode(words, show_progress_bar=True)
+    emb_array = np.asarray(embeddings)
+    embeddings_dict = {}
+    for item, emb in zip(data_list, emb_array):
+        embeddings_dict[item['word']] = emb
+    return embeddings_dict, emb_array
 
 def generate_heatmap(data_list, embeddings_dict, output_path):
     """生成语义相似度热力图 - 只计算同分类同语言的词汇间相似度，多行显示"""
@@ -469,14 +839,12 @@ def generate_mds_plot(data_list, embeddings_dict, output_path):
     # 获取嵌入向量
     embeddings = [embeddings_dict[word] for word in words]
     
-    print("正在进行MDS降维...")
-    mds = MDS(n_components=2, dissimilarity='precomputed', random_state=42)
-    
-    # 计算距离矩阵
-    from sklearn.metrics.pairwise import euclidean_distances
-    distance_matrix = euclidean_distances(embeddings)
-    
+    print("正在进行MDS降维 (cosine distance = 1 - cosine similarity)...")
+    # sklearn 新版仅接受 normalized_stress in {True, False, 'auto'}；'stress' 会报错
+    mds = MDS(n_components=2, dissimilarity='precomputed', random_state=42, normalized_stress='auto')
+    distance_matrix = semantic_distance_matrix_from_embeddings(np.asarray(embeddings))
     coords = mds.fit_transform(distance_matrix)
+    stress_2d = float(getattr(mds, 'stress_', np.nan))
     
     # 为每个分类分配颜色
     import matplotlib.cm as cm
@@ -570,7 +938,8 @@ def generate_mds_plot(data_list, embeddings_dict, output_path):
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
-    return output_path
+    # 与论文式(14)一致：跨语言位移使用以下 2D 坐标计算 ||x_EN - x_CN||
+    return output_path, stress_2d, np.asarray(coords)
 
 def generate_mds_3d_plot(data_list, embeddings_dict, output_path):
     """使用MDS降维生成3D交互式可视化 - 按分类着色"""
@@ -586,14 +955,11 @@ def generate_mds_3d_plot(data_list, embeddings_dict, output_path):
     # 获取嵌入向量
     embeddings = [embeddings_dict[word] for word in words]
     
-    print("正在进行3D MDS降维...")
-    mds = MDS(n_components=3, dissimilarity='precomputed', random_state=42)
-    
-    # 计算距离矩阵
-    from sklearn.metrics.pairwise import euclidean_distances
-    distance_matrix = euclidean_distances(embeddings)
-    
+    print("正在进行3D MDS降维 (cosine distance = 1 - cosine similarity)...")
+    mds = MDS(n_components=3, dissimilarity='precomputed', random_state=42, normalized_stress='auto')
+    distance_matrix = semantic_distance_matrix_from_embeddings(np.asarray(embeddings))
     coords = mds.fit_transform(distance_matrix)
+    stress_3d = float(getattr(mds, 'stress_', np.nan))
     
     # 为每个分类分配颜色
     import matplotlib.cm as cm
@@ -685,7 +1051,317 @@ def generate_mds_3d_plot(data_list, embeddings_dict, output_path):
     # 保存为HTML文件
     fig.write_html(output_path)
     print(f"3D MDS图已保存: {output_path}")
+    return output_path, stress_3d
+
+
+def export_empirical_tables_xlsx(
+    data_list,
+    similarity_matrix,
+    stress_2d,
+    stress_3d,
+    threshold,
+    output_path,
+    coords_mds2d=None,
+):
+    """生成论文实证汇总 Excel（多 sheet）。
+    跨语言位移汇总（论文式14）：使用 MDS 二维坐标上 ||x_EN-x_CN||；配对表同时给出嵌入空间 D_ij=1-S_ij。
+    """
+    n = len(data_list)
+    words = [item['word'] for item in data_list]
+    dist_mat = 1.0 - similarity_matrix
+
+    # -------- 1 Pairwise Similarity --------
+    pair_rows = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            sim = float(similarity_matrix[i, j])
+            d1 = canonical_domain(data_list[i]['category'])
+            d2 = canonical_domain(data_list[j]['category'])
+            pair_rows.append({
+                'Word 1': words[i],
+                'Word 2': words[j],
+                'Language 1': data_list[i].get('language', ''),
+                'Language 2': data_list[j].get('language', ''),
+                'Domain 1': d1,
+                'Domain 2': d2,
+                'Submodule 1': data_list[i].get('submodule', ''),
+                'Submodule 2': data_list[j].get('submodule', ''),
+                'Similarity': sim,
+                'Distance': float(dist_mat[i, j]),
+                'Domain Pair': domain_pair_type(data_list[i]['category'], data_list[j]['category']),
+                'Language Pair': language_pair_label(data_list[i].get('language', ''), data_list[j].get('language', '')),
+            })
+    df_pair = pd.DataFrame(pair_rows)
+
+    def agg_sim_stats(sim_list):
+        sim_list = [float(x) for x in sim_list if np.isfinite(x)]
+        if not sim_list:
+            return {'N': 0, 'Mean Similarity': np.nan, 'SD': np.nan, 'Min': np.nan, 'Max': np.nan, 'Mean Distance': np.nan}
+        arr = np.array(sim_list)
+        return {
+            'N': len(sim_list),
+            'Mean Similarity': float(np.mean(arr)),
+            'SD': float(np.std(arr, ddof=0)),
+            'Min': float(np.min(arr)),
+            'Max': float(np.max(arr)),
+            'Mean Distance': float(np.mean(1.0 - arr)),
+        }
+
+    # -------- 2 Domain Similarity Summary --------
+    domain_buckets = {'Trade–Trade': [], 'Intercultural–Intercultural': [], 'Trade–Intercultural': []}
+    for i in range(n):
+        for j in range(i + 1, n):
+            dp = domain_pair_type(data_list[i]['category'], data_list[j]['category'])
+            if dp in domain_buckets:
+                domain_buckets[dp].append(similarity_matrix[i, j])
+    df_dom = pd.DataFrame([
+        {'Domain Pair': k, **agg_sim_stats(domain_buckets[k])}
+        for k in ['Trade–Trade', 'Intercultural–Intercultural', 'Trade–Intercultural']
+    ])
+
+    # -------- 3 Language Similarity Summary --------
+    lang_buckets = {'Chinese–Chinese': [], 'English–English': [], 'Chinese–English': []}
+    for i in range(n):
+        for j in range(i + 1, n):
+            lp = language_pair_label(data_list[i].get('language', ''), data_list[j].get('language', ''))
+            if lp in lang_buckets:
+                lang_buckets[lp].append(similarity_matrix[i, j])
+    df_lang = pd.DataFrame([
+        {'Language Pair': k, **agg_sim_stats(lang_buckets[k])}
+        for k in ['Chinese–Chinese', 'English–English', 'Chinese–English']
+    ])
+
+    # -------- 4 Submodule internal similarity --------
+    sub_dom_pairs = defaultdict(list)
+    for i in range(n):
+        for j in range(i + 1, n):
+            si = str(data_list[i].get('submodule', '') or '')
+            sj = str(data_list[j].get('submodule', '') or '')
+            if si and si == sj:
+                dom = canonical_domain(data_list[i]['category'])
+                if canonical_domain(data_list[j]['category']) != dom:
+                    dom = 'Mixed'
+                sub_dom_pairs[(si, dom)].append(similarity_matrix[i, j])
+    df_sub_in = pd.DataFrame([
+        {
+            'Submodule': key[0],
+            'Domain': key[1],
+            'N Pairs': len(vals),
+            'Mean Similarity': float(np.mean(vals)),
+            'SD': float(np.std(vals, ddof=0)),
+            'Min': float(np.min(vals)),
+            'Max': float(np.max(vals)),
+        }
+        for key, vals in sorted(sub_dom_pairs.items())
+        if vals
+    ])
+
+    # -------- 5 Submodule cross-domain (different submodule labels) --------
+    cross_sub = defaultdict(list)
+    for i in range(n):
+        for j in range(i + 1, n):
+            si = str(data_list[i].get('submodule', '') or '')
+            sj = str(data_list[j].get('submodule', '') or '')
+            if si != sj:
+                a, b = sorted([si, sj])
+                dp = domain_pair_type(data_list[i]['category'], data_list[j]['category'])
+                cross_sub[(a, b, dp)].append(similarity_matrix[i, j])
+    df_cross_sub = pd.DataFrame([
+        {
+            'Submodule 1': key[0],
+            'Submodule 2': key[1],
+            'Domain Pair': key[2],
+            'N': len(vals),
+            'Mean Similarity': float(np.mean(vals)),
+            'SD': float(np.std(vals, ddof=0)),
+        }
+        for key, vals in sorted(cross_sub.items())
+        if vals
+    ])
+
+    # -------- 6 Centrality Ranking --------
+    G = build_threshold_graph(data_list, similarity_matrix, threshold)
+    wd, ev, bw = compute_network_centralities(G)
+    cent_rows = []
+    for i in range(n):
+        cent_rows.append({
+            'Word': words[i],
+            'Language': data_list[i].get('language', ''),
+            'Domain': canonical_domain(data_list[i]['category']),
+            'Submodule': data_list[i].get('submodule', ''),
+            'Weighted Degree': wd.get(i, 0.0),
+            'Eigenvector Centrality': ev.get(i, 0.0),
+            'Betweenness Centrality': bw.get(i, 0.0),
+        })
+    df_cent = pd.DataFrame(cent_rows)
+    df_cent = df_cent.sort_values('Weighted Degree', ascending=False).reset_index(drop=True)
+    df_cent.insert(0, 'Rank', range(1, len(df_cent) + 1))
+
+    # -------- 7 Bridge Concept Ranking --------
+    bridge_rows = []
+    for i in range(n):
+        di = canonical_domain(data_list[i]['category'])
+        cd_links = 0
+        cd_sum = 0.0
+        for j in range(n):
+            if i == j:
+                continue
+            dj = canonical_domain(data_list[j]['category'])
+            if di == dj:
+                continue
+            s = float(similarity_matrix[i, j])
+            if s > threshold:
+                cd_links += 1
+                cd_sum += s
+        cd_mean = cd_sum / cd_links if cd_links else 0.0
+        bscore = cd_sum + float(bw.get(i, 0.0))
+        bridge_rows.append({
+            'Word': words[i],
+            'Language': data_list[i].get('language', ''),
+            'Domain': di,
+            'Submodule': data_list[i].get('submodule', ''),
+            'Cross-domain Links': cd_links,
+            'Cross-domain Similarity Sum': cd_sum,
+            'Cross-domain Similarity Mean': cd_mean,
+            'Betweenness Centrality': float(bw.get(i, 0.0)),
+            'Bridge Score': bscore,
+        })
+    df_bridge = pd.DataFrame(bridge_rows)
+    df_bridge = df_bridge.sort_values('Bridge Score', ascending=False).reset_index(drop=True)
+    df_bridge.insert(0, 'Rank', range(1, len(df_bridge) + 1))
+
+    # -------- 8 Cross-linguistic Pair Distance --------
+    groups = defaultdict(list)
+    for idx, item in enumerate(data_list):
+        cid = item.get('concept_id')
+        key = cid if cid else item['row_index']
+        groups[key].append(idx)
+
+    xl_rows = []
+    for key, idxs in groups.items():
+        ens = [i for i in idxs if canonical_language(data_list[i]['language']) == 'English']
+        zhs = [i for i in idxs if canonical_language(data_list[i]['language']) == 'Chinese']
+        if not ens or not zhs:
+            continue
+        ei, zi = ens[0], zhs[0]
+        sim = float(similarity_matrix[ei, zi])
+        sem_dist = float(1.0 - sim)
+        row = {
+            'Concept ID': str(key),
+            'English Term': words[ei],
+            'Chinese Term': words[zi],
+            'Domain': canonical_domain(data_list[ei]['category']),
+            'Submodule': str(data_list[ei].get('submodule', '') or ''),
+            'Similarity': sim,
+            'Semantic Distance (1-cosine)': sem_dist,
+        }
+        if coords_mds2d is not None and len(coords_mds2d) > max(ei, zi):
+            d_mds = float(
+                np.linalg.norm(coords_mds2d[ei] - coords_mds2d[zi])
+            )
+            row['MDS-2D Cross-Ling Displacement'] = d_mds
+        else:
+            row['MDS-2D Cross-Ling Displacement'] = np.nan
+        xl_rows.append(row)
+    df_xl = pd.DataFrame(xl_rows)
+
+    # -------- 9 Cross-linguistic Displacement by Domain（论文式14：MDS 二维位移）--------
+    disp_key = 'MDS-2D Cross-Ling Displacement'
+    disp = defaultdict(list)
+    for r in xl_rows:
+        v = r.get(disp_key)
+        if v is not None and np.isfinite(v):
+            disp[r['Domain']].append(float(v))
+    df_disp = pd.DataFrame([
+        {
+            'Domain': dom,
+            'N': len(vals),
+            'Mean MDS-2D Displacement': float(np.mean(vals)),
+            'SD': float(np.std(vals, ddof=0)),
+            'Min': float(np.min(vals)),
+            'Max': float(np.max(vals)),
+        }
+        for dom, vals in sorted(disp.items())
+    ])
+
+    # -------- 10 MDS Stress --------
+    df_stress = pd.DataFrame([
+        {'Projection': 'MDS 2D', 'Stress': stress_2d, 'Distance Type': '1 - cosine similarity'},
+        {'Projection': 'MDS 3D', 'Stress': stress_3d, 'Distance Type': '1 - cosine similarity'},
+    ])
+
+    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+        df_pair.to_excel(writer, sheet_name='Pairwise Similarity', index=False)
+        df_dom.to_excel(writer, sheet_name='Domain Similarity Summary', index=False)
+        df_lang.to_excel(writer, sheet_name='Language Similarity Summary', index=False)
+        df_sub_in.to_excel(writer, sheet_name='Submodule Similarity Summary', index=False)
+        df_cross_sub.to_excel(writer, sheet_name='Submodule Cross-domain Sim', index=False)
+        df_cent.to_excel(writer, sheet_name='Centrality Ranking', index=False)
+        df_bridge.to_excel(writer, sheet_name='Bridge Concept Ranking', index=False)
+        df_xl.to_excel(writer, sheet_name='Cross-linguistic Pair Distance', index=False)
+        df_disp.to_excel(writer, sheet_name='XLing MDS2D Displacement', index=False)
+        df_stress.to_excel(writer, sheet_name='MDS Stress Summary', index=False)
+
+    print(f"实证表格已保存: {output_path}")
     return output_path
+
+
+def run_cross_model_validation(
+    data_list,
+    baseline_similarity_matrix,
+    model_names,
+    threshold,
+    baseline_model_label='paraphrase-multilingual-MiniLM-L12-v2 (baseline)',
+):
+    """多模型：先写当前 baseline 一行（相关=1），再对其余模型计算相关与统计。"""
+    rows = []
+    baseline = baseline_similarity_matrix
+    mask = np.ones(len(data_list), dtype=bool)
+    btm, bim, bcm = mean_similarity_by_domain_groups(baseline, data_list, mask)
+    btops = top_k_bridge_words(data_list, baseline, threshold, k=5)
+    rows.append({
+        'Model': baseline_model_label,
+        'Trade Mean': btm,
+        'Intercultural Mean': bim,
+        'Cross-domain Mean': bcm,
+        'Top Bridge Concepts': ', '.join(btops),
+        'Matrix Correlation with Baseline': 1.0,
+    })
+
+    seen = {baseline_model_label.lower()}
+    for name in model_names:
+        name = name.strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        try:
+            mdl = get_sentence_transformer(name)
+            _, emb = calculate_semantic_distances(data_list, mdl)
+            sim = cosine_similarity(emb)
+        except Exception as ex:
+            rows.append({
+                'Model': name,
+                'Trade Mean': np.nan,
+                'Intercultural Mean': np.nan,
+                'Cross-domain Mean': np.nan,
+                'Top Bridge Concepts': str(ex)[:200],
+                'Matrix Correlation with Baseline': np.nan,
+            })
+            continue
+
+        tm, im, cm = mean_similarity_by_domain_groups(sim, data_list, mask)
+        tops = top_k_bridge_words(data_list, sim, threshold, k=5)
+        corr = similarity_upper_tri_pearson(baseline, sim)
+        rows.append({
+            'Model': name,
+            'Trade Mean': tm,
+            'Intercultural Mean': im,
+            'Cross-domain Mean': cm,
+            'Top Bridge Concepts': ', '.join(tops),
+            'Matrix Correlation with Baseline': corr,
+        })
+    return pd.DataFrame(rows)
+
 
 def generate_similarity_excel(data_list, similarity_matrix, words, output_path):
     """生成包含所有词汇对相似度的Excel文件"""
@@ -784,8 +1460,8 @@ def upload_file():
             if len(data_list) > 200:
                 return jsonify({'error': '词汇数量不能超过200个'}), 400
             
-            # 计算语义嵌入
-            embeddings_dict = calculate_semantic_distances(data_list)
+            # 计算语义嵌入（有序矩阵与词表一一对应，避免同词覆盖）
+            embeddings_dict, emb_matrix = calculate_semantic_distances(data_list)
             
             # 生成时间戳
             result_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -812,20 +1488,21 @@ def upload_file():
             generate_network_graph_weighted(data_list, embeddings_dict, network_eigen_path, threshold, 'eigenvector', power)
             results['network_eigen'] = f'/results/network_eigen_{result_timestamp}.png'
             
-            # 3. MDS 2D可视化（按分类着色）
+            # 3. MDS 2D可视化（按分类着色）；距离矩阵为 1 - cosine similarity；坐标用于论文式(14)跨语言位移
             mds_path = os.path.join(app.config['RESULTS_FOLDER'], f'mds_{result_timestamp}.png')
-            generate_mds_plot(data_list, embeddings_dict, mds_path)
+            _, stress_2d, coords_mds2d = generate_mds_plot(data_list, embeddings_dict, mds_path)
             results['mds'] = f'/results/mds_{result_timestamp}.png'
             
             # 4. MDS 3D可视化（交互式）
             mds_3d_path = os.path.join(app.config['RESULTS_FOLDER'], f'mds_3d_{result_timestamp}.html')
-            generate_mds_3d_plot(data_list, embeddings_dict, mds_3d_path)
+            _, stress_3d = generate_mds_3d_plot(data_list, embeddings_dict, mds_3d_path)
             results['mds_3d'] = f'/results/mds_3d_{result_timestamp}.html'
             
-            # 4. 生成相似度数据（所有词汇对）
+            # 5. 生成相似度数据（所有词汇对）
             words = [item['word'] for item in data_list]
-            embeddings = [embeddings_dict[word] for word in words]
-            similarity_matrix = cosine_similarity(embeddings)
+            similarity_matrix = cosine_similarity(emb_matrix)
+            results['mds_stress_2d'] = stress_2d
+            results['mds_stress_3d'] = stress_3d
             
             similarity_data = {
                 'words': words,
@@ -852,10 +1529,65 @@ def upload_file():
             results['similarity_data'] = similarity_data
             results['word_count'] = len(data_list)
             
-            # 5. 生成Excel相似度数据文件
+            # 6. 生成Excel相似度数据文件
             excel_path = os.path.join(app.config['RESULTS_FOLDER'], f'similarity_data_{result_timestamp}.xlsx')
             generate_similarity_excel(data_list, similarity_matrix, words, excel_path)
             results['excel_download'] = f'/results/similarity_data_{result_timestamp}.xlsx'
+
+            # 7. 论文实证表 empirical_tables
+            empirical_path = os.path.join(
+                app.config['RESULTS_FOLDER'], f'empirical_tables_{result_timestamp}.xlsx'
+            )
+            export_empirical_tables_xlsx(
+                data_list,
+                similarity_matrix,
+                stress_2d,
+                stress_3d,
+                threshold,
+                empirical_path,
+                coords_mds2d=coords_mds2d,
+            )
+            results['empirical_tables_download'] = f'/results/empirical_tables_{result_timestamp}.xlsx'
+
+            # 可选：Leave-one-submodule-out / Random subsampling（耗时，表单勾选）
+            run_loo = request.form.get('run_loo') in ('1', 'true', 'on', 'yes')
+            run_rs = request.form.get('run_rs') in ('1', 'true', 'on', 'yes')
+            if run_loo or run_rs:
+                rb_path = os.path.join(
+                    app.config['RESULTS_FOLDER'], f'robustness_tables_{result_timestamp}.xlsx'
+                )
+                with pd.ExcelWriter(rb_path, engine='openpyxl') as writer:
+                    if run_loo:
+                        df_loo = run_leave_one_submodule_out(data_list, similarity_matrix, threshold)
+                        df_loo.to_excel(writer, sheet_name='Leave-one-submodule-out', index=False)
+                    if run_rs:
+                        rr = float(request.form.get('remove_ratio', 0.2))
+                        ni = int(request.form.get('n_iter', 100))
+                        df_rs_sum, df_rs_bridge = run_random_subsampling(
+                            data_list, similarity_matrix, threshold, remove_ratio=rr, n_iter=ni
+                        )
+                        df_rs_sum.to_excel(writer, sheet_name='Random Subsampling Summary', index=False)
+                        df_rs_bridge.to_excel(writer, sheet_name='Bridge Concept Stability', index=False)
+                results['robustness_tables_download'] = f'/results/robustness_tables_{result_timestamp}.xlsx'
+
+            # 可选：多模型验证（每个模型单独加载，可能很慢）
+            raw_models = request.form.get('cross_models', '') or ''
+            extra_models = [
+                m.strip()
+                for m in re.split(r'[\n,]+', raw_models)
+                if m.strip()
+            ]
+            if extra_models:
+                cv_path = os.path.join(
+                    app.config['RESULTS_FOLDER'], f'cross_model_validation_{result_timestamp}.xlsx'
+                )
+                df_cv = run_cross_model_validation(
+                    data_list, similarity_matrix, extra_models, threshold
+                )
+                df_cv.to_excel(cv_path, sheet_name='Cross-model Validation Summary', index=False)
+                results['cross_model_validation_download'] = (
+                    f'/results/cross_model_validation_{result_timestamp}.xlsx'
+                )
             
             # 保存数据用于动态网络图生成
             try:
